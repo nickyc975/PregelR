@@ -1,5 +1,5 @@
-use super::state::State;
 use super::message::Message;
+use super::state::State;
 
 pub trait Context<V, E, M> {
     fn state(&self) -> State;

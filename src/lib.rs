@@ -4,7 +4,7 @@ pub mod pregel {
     pub mod master;
     pub mod vertex;
 
-    mod context;    
+    mod context;
     mod message;
     mod state;
     mod worker;
