@@ -6,13 +6,13 @@ pub trait Context<V, E, M> {
 
     fn superstep(&self) -> i64;
 
-    fn getNumEdges(&self) -> i64;
+    fn num_edges(&self) -> i64;
 
-    fn getNumVertices(&self) -> i64;
+    fn num_vertices(&self) -> i64;
 
-    fn addVertex(&mut self, id: i64);
+    fn add_vertex(&mut self, id: i64);
 
-    fn markAsDone(&mut self, id: i64);
+    fn mark_as_done(&mut self, id: i64);
 
-    fn sendMessage(&mut self, message: Message<M>);
+    fn send_message(&mut self, message: Message<M>);
 }
