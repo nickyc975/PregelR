@@ -1,9 +1,10 @@
-pub trait Aggregate<V> {
-    fn clone(&self) -> dyn Aggregate<V>;
+use super::vertex::Vertex;
+use std::any::Any;
 
-    fn agg_vertex(&self, a: &V, b: &V);
-
-    fn agg_value_of(&self, a: &dyn Aggregate<V>, b: &dyn Aggregate<V>);
-
-    fn clear(&self);
+pub trait Aggregate<V, E, M>
+where
+    M: Clone,
+{
+    fn report(&self, v: &Vertex<V, E, M>) -> Box<dyn Any>;
+    fn aggregate(&self, a: Box<dyn Any>, b: Box<dyn Any>) -> Box<dyn Any>;
 }

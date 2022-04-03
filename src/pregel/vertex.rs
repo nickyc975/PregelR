@@ -3,33 +3,48 @@ use super::message::Message;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::LinkedList;
-use std::sync::Arc;
 
-pub struct Vertex<V, E, M>
+pub struct Vertex<'a, V, E, M>
 where
     M: Clone,
 {
     pub id: i64,
-    pub value: V,
-    context: Arc<RefCell<dyn Context<V, E, M>>>,
+    pub value: Option<V>,
+    pub context: &'a Context<V, E, M>,
+    active: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
     odd_recv_queue: LinkedList<M>,
     even_recv_queue: LinkedList<M>,
+    pub send_queue: RefCell<LinkedList<Message<M>>>,
 }
 
-impl<V, E, M> Vertex<V, E, M>
+impl<'a, V, E, M> Vertex<'a, V, E, M>
 where
     M: Clone,
 {
-    pub fn new(id: i64, value: V, context: Arc<RefCell<dyn Context<V, E, M>>>) -> Self {
+    pub fn new(id: i64, context: &'a Context<V, E, M>) -> Self {
         Vertex {
             id,
-            value,
+            value: None,
             context,
+            active: true,
             outer_edges: HashMap::new(),
             odd_recv_queue: LinkedList::new(),
             even_recv_queue: LinkedList::new(),
+            send_queue: RefCell::new(LinkedList::new()),
         }
+    }
+
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
+    pub fn activate(&mut self) {
+        self.active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active = false;
     }
 
     pub fn add_outer_edge(&mut self, edge: (i64, i64, E)) {
@@ -43,10 +58,7 @@ where
     }
 
     pub fn has_outer_edge_to(&self, target: i64) -> bool {
-        match self.outer_edges.get(&target) {
-            Some(_) => true,
-            None => false,
-        }
+        self.outer_edges.contains_key(&target)
     }
 
     pub fn get_outer_edge_to(&self, target: i64) -> Option<&(i64, i64, E)> {
@@ -58,8 +70,8 @@ where
     }
 
     pub fn send_message_to(&self, receiver: i64, value: M) {
-        let message = Message::new(value, self.id, receiver, self.context.borrow().superstep());
-        self.context.borrow_mut().send_message(message);
+        let message = Message::new(value, self.id, receiver);
+        self.send_queue.borrow_mut().push_back(message);
     }
 
     pub fn send_message(&self, value: M) {
@@ -69,27 +81,23 @@ where
     }
 
     pub fn has_messages(&self) -> bool {
-        if self.context.borrow().superstep() & 2 == 0 {
+        if self.context.superstep & 2 == 0 {
             !self.odd_recv_queue.is_empty()
         } else {
             !self.even_recv_queue.is_empty()
         }
     }
 
-    pub fn read_message(&mut self) -> M {
-        if self.context.borrow().superstep() & 2 == 0 {
-            self.odd_recv_queue.pop_front().unwrap()
+    pub fn read_message(&mut self) -> Option<M> {
+        if self.context.superstep & 2 == 0 {
+            self.odd_recv_queue.pop_front()
         } else {
-            self.even_recv_queue.pop_front().unwrap()
+            self.even_recv_queue.pop_front()
         }
     }
 
-    pub fn vote_to_halt(&self) {
-        self.context.borrow_mut().mark_as_done(self.id);
-    }
-
     pub fn receive_message(&mut self, message: M) {
-        if self.context.borrow().superstep() & 2 == 0 {
+        if self.context.superstep & 2 == 0 {
             self.odd_recv_queue.push_back(message);
         } else {
             self.even_recv_queue.push_back(message);
@@ -97,18 +105,18 @@ where
     }
 
     pub fn has_next_step_message(&self) -> bool {
-        if self.context.borrow().superstep() & 2 == 0 {
+        if self.context.superstep & 2 == 0 {
             !self.even_recv_queue.is_empty()
         } else {
             !self.odd_recv_queue.is_empty()
         }
     }
 
-    pub fn read_next_step_message(&mut self) -> M {
-        if self.context.borrow().superstep() & 2 == 0 {
-            self.even_recv_queue.pop_front().unwrap()
+    pub fn read_next_step_message(&mut self) -> Option<M> {
+        if self.context.superstep & 2 == 0 {
+            self.even_recv_queue.pop_front()
         } else {
-            self.odd_recv_queue.pop_front().unwrap()
+            self.odd_recv_queue.pop_front()
         }
     }
 }

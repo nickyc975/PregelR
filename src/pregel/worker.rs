@@ -1,13 +1,17 @@
 use super::aggregate::Aggregate;
 use super::combine::Combine;
 use super::context::Context;
-use super::message::Message;
+use super::message::{ChannelMessage, Message};
 use super::state::State;
 use super::vertex::Vertex;
-use std::cell::RefCell;
 use std::collections::{HashMap, LinkedList};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+
+use std::any::Any;
+use std::cell::RefCell;
+use std::fs;
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
+use std::time::Instant;
 
 static SEND_THRESHOLD: i32 = 10;
 
@@ -16,123 +20,176 @@ where
     M: Clone,
 {
     pub id: i64,
-    n_active_vertices: i64,
-    pub time_cost: i64,
-    pub n_msg_sent: RefCell<i64>,
+    pub time_cost: u128,
+    pub n_msg_sent: i64,
     pub n_msg_recv: i64,
-    vertices: HashMap<i64, Vertex<V, E, M>>,
-    edges_path: &'a Box<Path>,
-    vertices_path: &'a Box<Path>,
-    context: Arc<Mutex<dyn Context<V, E, M>>>,
-    edge_parser: &'a Box<dyn Fn(String) -> (i64, i64, E)>,
-    vertex_parser: &'a Box<dyn Fn(String) -> (i64, V)>,
-    compute: &'a Box<dyn Fn(&mut Vertex<V, E, M>)>,
-    send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
-    combiner: &'a Option<Box<dyn Combine<M>>>,
-    pub aggregators: Vec<Box<dyn Aggregate<V>>>,
+    n_active_vertices: i64,
+    context: &'a Context<V, E, M>,
+    vertices: Mutex<HashMap<i64, Vertex<'a, V, E, M>>>,
+    sender: Sender<ChannelMessage<M>>,
+    aggregated_values: RefCell<HashMap<String, Box<dyn Any>>>,
 }
 
 impl<'a, V, E, M> Worker<'a, V, E, M>
 where
     M: Clone,
 {
-    pub fn new(
-        id: i64,
-        context: Arc<Mutex<dyn Context<V, E, M>>>,
-        edges_path: &'a Box<Path>,
-        vertices_path: &'a Box<Path>,
-        edge_parser: &'a Box<dyn Fn(String) -> (i64, i64, E)>,
-        vertex_parser: &'a Box<dyn Fn(String) -> (i64, V)>,
-        compute: &'a Box<dyn Fn(&mut Vertex<V, E, M>)>,
-        combiner: &'a Option<Box<dyn Combine<M>>>,
-    ) -> Self {
+    pub fn new(id: i64, context: &'a Context<V, E, M>, sender: Sender<ChannelMessage<M>>) -> Self {
         Worker {
             id,
             context,
-            n_active_vertices: 0,
+            sender,
             time_cost: 0,
-            n_msg_sent: RefCell::new(0),
+            n_msg_sent: 0,
             n_msg_recv: 0,
-            vertices: HashMap::new(),
-            edges_path,
-            vertices_path,
-            edge_parser,
-            vertex_parser,
-            compute,
-            combiner,
-            send_queues: RefCell::new(HashMap::new()),
-            aggregators: Vec::new(),
+            n_active_vertices: 0,
+            vertices: Mutex::new(HashMap::new()),
+            aggregated_values: RefCell::new(HashMap::new()),
         }
     }
 
     pub fn local_n_vertices(&self) -> i64 {
-        self.vertices.len() as i64
+        match self.vertices.lock() {
+            Ok(vertices) => vertices.len() as i64,
+            Err(_) => 0,
+        }
     }
 
     pub fn local_n_edges(&self) -> i64 {
-        self.vertices
-            .values()
-            .map(|v| v.get_outer_edges().len())
-            .sum::<usize>() as i64
-    }
-
-    fn send_messages(&self, queue: &mut LinkedList<Message<M>>) {
-        let context = &mut self.context.lock().unwrap();
-        while !queue.is_empty() {
-            context.send_message(queue.pop_front().unwrap());
-            *self.n_msg_sent.borrow_mut() += 1;
+        match self.vertices.lock() {
+            Ok(vertices) => {
+                let mut sum = 0_i64;
+                for v in vertices.values() {
+                    sum += v.get_outer_edges().len() as i64;
+                }
+                drop(vertices);
+                sum
+            }
+            Err(_) => 0,
         }
     }
-}
 
-impl<'a, V, E, M> Context<V, E, M> for Worker<'a, V, E, M>
-where
-    M: Clone,
-{
-    fn state(&self) -> State {
-        self.context.lock().unwrap().state()
+    pub fn receive_message(&mut self, message: Message<M>) {
+        match self.vertices.lock() {
+            Ok(mut vertices) => match vertices.get_mut(&message.receiver) {
+                Some(vertex) => {
+                    let value = match (
+                        self.context.combiner.as_ref(),
+                        vertex.read_next_step_message(),
+                    ) {
+                        (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                        _ => message.value,
+                    };
+                    vertex.receive_message(value);
+                    self.n_msg_recv += 1;
+                }
+                None => (),
+            },
+            Err(_) => (),
+        }
     }
 
-    fn superstep(&self) -> i64 {
-        self.context.lock().unwrap().superstep()
-    }
-
-    fn num_edges(&self) -> i64 {
-        self.context.lock().unwrap().num_edges()
-    }
-
-    fn num_vertices(&self) -> i64 {
-        self.context.lock().unwrap().num_edges()
-    }
-
-    fn add_vertex(&mut self, id: i64) {
-        self.context.lock().unwrap().add_vertex(id)
-    }
-
-    fn mark_as_done(&mut self, id: i64) {
-        self.n_active_vertices -= 1;
-    }
-
-    fn send_message(&mut self, mut message: Message<M>) {
-        let receiver = message.receiver;
-        let mut queues = self.send_queues.borrow_mut();
-        let queue_op = match queues.get_mut(&receiver) {
-            Some(queue) => Some(queue),
-            None => {
-                queues.insert(receiver, LinkedList::new());
-                queues.get_mut(&receiver)
+    pub fn add_vertex(&mut self, id: i64) {
+        match self.vertices.lock() {
+            Ok(mut vertices) => {
+                vertices.entry(id).or_insert(Vertex::new(id, self.context));
             }
-        };
+            Err(_) => (),
+        }
+    }
 
-        let queue = queue_op.unwrap();
-        let initial_op = queue.pop_front();
-        message.value = match (self.combiner, &initial_op) {
-            (Some(combine), Some(initial)) => combine.combine(&message.value, &initial.value),
-            _ => message.value,
+    pub fn run(&mut self) {
+        let now = Instant::now();
+        match self.context.state {
+            State::INITIALIZED => self.load(),
+            State::LOADED => self.clean(),
+            State::CLEANED => self.compute(),
+            State::COMPUTED => self.clean(),
+        }
+        self.time_cost = now.elapsed().as_millis();
+    }
+
+    pub fn report(&self, name: &String) -> Option<Box<dyn Any>> {
+        self.aggregated_values.borrow_mut().remove(name)
+    }
+
+    fn clean(&mut self) {
+        self.aggregated_values.borrow_mut().clear();
+        self.n_msg_recv = 0;
+        self.n_msg_sent = 0;
+    }
+
+    fn load_edges(&mut self) {}
+
+    fn load_vertices(&mut self) {}
+
+    fn load(&mut self) {
+        match self.context.edge_parser.as_ref() {
+            Some(_) => self.load_edges(),
+            None => (),
+        }
+
+        match self.context.vertex_parser.as_ref() {
+            Some(_) => self.load_vertices(),
+            None => (),
+        }
+    }
+
+    fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
+        match self.context.aggregators.get(name) {
+            Some(aggregator) => {
+                let new_val = aggregator.report(vertex);
+                let mut values_mut = self.aggregated_values.borrow_mut();
+                let (name, value) = match values_mut.remove_entry(name) {
+                    Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
+                    None => (name.clone(), new_val),
+                };
+                values_mut.insert(name, value);
+            }
+            None => (),
         };
-        queue.push_back(message);
-        if queue.len() > SEND_THRESHOLD as usize {
-            self.send_messages(queue);
+    }
+
+    fn send_messages_of(&self, vertex: &Vertex<V, E, M>) {
+        let send_queue = vertex.send_queue.borrow_mut();
+        // let receiver = message.receiver;
+        // let mut queues = self.send_queues.borrow_mut();
+        // let queue_op = match queues.get_mut(&receiver) {
+        //     Some(queue) => Some(queue),
+        //     None => {
+        //         queues.insert(receiver, LinkedList::new());
+        //         queues.get_mut(&receiver)
+        //     }
+        // };
+
+        // let queue = queue_op.unwrap();
+        // let initial_op = queue.pop_front();
+        // message.value = match (self.combiner, &initial_op) {
+        //     (Some(combine), Some(initial)) => combine.combine(&message.value, &initial.value),
+        //     _ => message.value,
+        // };
+        // queue.push_back(message);
+        // if queue.len() > SEND_THRESHOLD as usize {
+        //     self.send_messages(queue);
+        // }
+    }
+
+    fn compute(&mut self) {
+        match self.vertices.lock() {
+            Ok(mut vertices) => {
+                self.n_active_vertices = vertices.len() as i64;
+                for vertex in vertices.values_mut() {
+                    (self.context.compute)(vertex);
+
+                    for name in self.context.aggregators.keys() {
+                        self.aggregate(name, vertex);
+                    }
+
+                    self.send_messages_of(vertex);
+                    self.n_active_vertices -= if vertex.active() { 0 } else { 1 };
+                }
+            }
+            Err(_) => (),
         }
     }
 }
