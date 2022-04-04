@@ -4,48 +4,45 @@ use super::state::State;
 use super::vertex::Vertex;
 use std::collections::{HashMap, LinkedList};
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, BufRead};
-use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
-use std::thread::spawn;
 use std::time::Instant;
 
-pub struct Worker<'a, V, E, M>
+pub struct Worker<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
     pub id: i64,
-    pub time_cost: u128,
-    pub n_msg_sent: i64,
-    pub n_msg_recv: i64,
-    pub n_active_vertices: i64,
+    pub time_cost: RefCell<u128>,
+    pub n_msg_sent: RefCell<i64>,
+    pub n_msg_recv: RefCell<i64>,
+    pub n_active_vertices: RefCell<i64>,
     edges_path: Option<String>,
     vertices_path: Option<String>,
-    context: Arc<RwLock<Context<'a, V, E, M>>>,
-    vertices: Mutex<HashMap<i64, Vertex<'a, V, E, M>>>,
+    context: Arc<RwLock<Context<V, E, M>>>,
+    vertices: Mutex<HashMap<i64, Vertex<V, E, M>>>,
     sender: Sender<ChannelMessage<M>>,
     aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
 
-impl<'a, V, E, M> Worker<'a, V, E, M>
+impl<V, E, M> Worker<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
     pub fn new(
         id: i64,
         edges_path: Option<String>,
         vertices_path: Option<String>,
-        context: Arc<RwLock<Context<'a, V, E, M>>>,
+        context: Arc<RwLock<Context<V, E, M>>>,
         sender: Sender<ChannelMessage<M>>,
     ) -> Self {
         Worker {
@@ -54,10 +51,10 @@ where
             vertices_path,
             context,
             sender,
-            time_cost: 0,
-            n_msg_sent: 0,
-            n_msg_recv: 0,
-            n_active_vertices: 0,
+            time_cost: RefCell::new(0),
+            n_msg_sent: RefCell::new(0),
+            n_msg_recv: RefCell::new(0),
+            n_active_vertices: RefCell::new(0),
             vertices: Mutex::new(HashMap::new()),
             aggregated_values: RefCell::new(HashMap::new()),
             send_queues: RefCell::new(HashMap::new()),
@@ -96,7 +93,7 @@ where
                     _ => message.value,
                 };
                 vertex.receive_message(value);
-                self.n_msg_recv += 1;
+                *self.n_msg_recv.borrow_mut() += 1;
             }
         }
     }
@@ -112,32 +109,33 @@ where
         }
     }
 
-    pub fn run(&mut self) {
-        spawn(move || {
-            let now = Instant::now();
-            match self.context.read().unwrap().state {
-                State::INITIALIZED => self.load(),
-                State::LOADED => self.clean(),
-                State::CLEANED => self.compute(),
-                State::COMPUTED => self.communicate(),
-                State::COMMUNICATED => self.clean(),
-            }
-            self.time_cost = now.elapsed().as_millis();
-        });
+    pub fn run(&self) {
+        let now = Instant::now();
+        match self.context.read().unwrap().state {
+            State::INITIALIZED => self.load(),
+            State::LOADED => self.clean(),
+            State::CLEANED => self.compute(),
+            State::COMPUTED => self.communicate(),
+            State::COMMUNICATED => self.clean(),
+        }
+        *self.time_cost.borrow_mut() = now.elapsed().as_millis();
     }
 
     pub fn report(&self, name: &String) -> Option<Box<dyn Send + Sync>> {
         self.aggregated_values.borrow_mut().remove(name)
     }
 
-    fn clean(&mut self) {
+    fn clean(&self) {
         self.aggregated_values.borrow_mut().clear();
-        self.n_msg_recv = 0;
-        self.n_msg_sent = 0;
+        *self.n_msg_recv.borrow_mut() = 0;
+        *self.n_msg_sent.borrow_mut() = 0;
     }
 
-    fn load_edges(&mut self) {
-        match (self.edges_path, self.context.read().unwrap().edge_parser) {
+    fn load_edges(&self) {
+        match (
+            self.edges_path.as_ref(),
+            self.context.read().unwrap().edge_parser.as_ref(),
+        ) {
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
@@ -175,10 +173,10 @@ where
         }
     }
 
-    fn load_vertices(&mut self) {
+    fn load_vertices(&self) {
         match (
-            self.vertices_path,
-            self.context.read().unwrap().vertex_parser,
+            self.vertices_path.as_ref(),
+            self.context.read().unwrap().vertex_parser.as_ref(),
         ) {
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
@@ -205,7 +203,7 @@ where
         }
     }
 
-    fn load(&mut self) {
+    fn load(&self) {
         self.load_edges();
         self.load_vertices();
     }
@@ -244,10 +242,10 @@ where
         }
     }
 
-    fn compute(&mut self) {
+    fn compute(&self) {
         match self.vertices.lock() {
             Ok(mut vertices) => {
-                self.n_active_vertices = vertices.len() as i64;
+                *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
                 for vertex in vertices.values_mut() {
                     (self.context.read().unwrap().compute)(vertex);
 
@@ -256,14 +254,14 @@ where
                     }
 
                     self.send_messages_of(vertex);
-                    self.n_active_vertices -= if vertex.active() { 0 } else { 1 };
+                    *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
                 }
             }
             Err(_) => (),
         }
     }
 
-    fn communicate(&mut self) {
+    fn communicate(&self) {
         let mut send_queues = self.send_queues.borrow_mut();
         for (_, mut send_queue) in send_queues.drain() {
             while let Some(message) = send_queue.pop_front() {

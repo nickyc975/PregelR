@@ -13,38 +13,38 @@ use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread::spawn;
 
-pub struct Master<'a, V, E, M>
+pub struct Master<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
     nworkers: i64,
     n_active_workers: i64,
-    workers: HashMap<i64, Worker<'a, V, E, M>>,
-    context: Arc<RwLock<Context<'a, V, E, M>>>,
+    workers: HashMap<i64, Worker<V, E, M>>,
+    context: Arc<RwLock<Context<V, E, M>>>,
     sender: mpsc::Sender<ChannelMessage<M>>,
     receiver: mpsc::Receiver<ChannelMessage<M>>,
 }
 
-impl<'a, V, E, M> Master<'a, V, E, M>
+impl<V, E, M> Master<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
     pub fn new(
         nworkers: i64,
-        compute: &'a dyn Fn(&mut Vertex<V, E, M>),
-        work_path: &'a String,
+        compute: Box<dyn Fn(&mut Vertex<V, E, M>)>,
+        work_path: String,
     ) -> Self {
+        let path = Path::new(&work_path);
         let (sender, receiver) = mpsc::channel();
-        let context = Context::new(compute, Path::new(work_path));
 
-        if context.work_path.exists() {
+        if path.exists() {
             panic!("Work path {} exists!", work_path);
         } else {
-            match fs::create_dir_all(context.work_path) {
+            match fs::create_dir_all(path) {
                 Ok(_) => (),
                 Err(err) => panic!("Failed to create the work path: {}", err),
             }
@@ -54,7 +54,7 @@ where
             nworkers,
             n_active_workers: 0,
             workers: HashMap::new(),
-            context: Arc::new(RwLock::new(context)),
+            context: Arc::new(RwLock::new(Context::new(compute, work_path))),
             sender,
             receiver,
         }
@@ -62,7 +62,7 @@ where
 
     pub fn set_edge_parser(
         &mut self,
-        edge_parser: &'a dyn Fn(&String) -> (i64, i64, E),
+        edge_parser: Box<dyn Fn(&String) -> (i64, i64, E)>,
     ) -> &mut Self {
         self.context.write().unwrap().edge_parser = Some(edge_parser);
         self
@@ -70,13 +70,13 @@ where
 
     pub fn set_vertex_parser(
         &mut self,
-        vertex_parser: &'a dyn Fn(&String) -> (i64, V),
+        vertex_parser: Box<dyn Fn(&String) -> (i64, V)>,
     ) -> &mut Self {
         self.context.write().unwrap().vertex_parser = Some(vertex_parser);
         self
     }
 
-    pub fn set_combiner(&mut self, combiner: &'a dyn Combine<M>) -> &mut Self {
+    pub fn set_combiner(&mut self, combiner: Box<dyn Combine<M>>) -> &mut Self {
         self.context.write().unwrap().combiner = Some(combiner);
         self
     }
@@ -84,7 +84,7 @@ where
     pub fn add_aggregator(
         &mut self,
         name: String,
-        aggregator: &'a dyn Aggregate<V, E, M>,
+        aggregator: Box<dyn Aggregate<V, E, M>>,
     ) -> &mut Self {
         self.context
             .write()
@@ -95,11 +95,13 @@ where
     }
 
     fn cal_index_for_edge(&self, line: &String) -> usize {
-        ((self.context.read().unwrap().edge_parser.unwrap())(line).0 % self.nworkers) as usize
+        ((self.context.read().unwrap().edge_parser.as_ref().unwrap())(line).0 % self.nworkers)
+            as usize
     }
 
     fn cal_index_for_vertex(&self, line: &String) -> usize {
-        ((self.context.read().unwrap().vertex_parser.unwrap())(line).0 % self.nworkers) as usize
+        ((self.context.read().unwrap().vertex_parser.as_ref().unwrap())(line).0 % self.nworkers)
+            as usize
     }
 
     fn partition(
@@ -130,9 +132,12 @@ where
 
     pub fn load_edges(&mut self, path: &Path) {
         let context = self.context.read().unwrap();
-        let edges_path = Path::new(context.work_path).join("graph").join("parts");
+        let edges_path = Path::new(&context.work_path).join("graph").join("parts");
 
-        match (context.edge_parser, fs::create_dir_all(&edges_path)) {
+        match (
+            context.edge_parser.as_ref(),
+            fs::create_dir_all(&edges_path),
+        ) {
             (Some(_), Ok(())) => {
                 let _ = self.partition(path, &edges_path, true);
             }
@@ -142,9 +147,12 @@ where
 
     pub fn load_vertices(&mut self, path: &Path) {
         let context = self.context.read().unwrap();
-        let vertices_path = Path::new(context.work_path).join("vertices").join("parts");
+        let vertices_path = Path::new(&context.work_path).join("vertices").join("parts");
 
-        match (context.vertex_parser, fs::create_dir_all(&vertices_path)) {
+        match (
+            context.vertex_parser.as_ref(),
+            fs::create_dir_all(&vertices_path),
+        ) {
             (Some(_), Ok(())) => {
                 let _ = self.partition(path, &vertices_path, false);
             }
@@ -185,7 +193,7 @@ where
         }
     }
 
-    pub fn run(&'a mut self) {
+    pub fn run(&mut self) {
         for i in 0..self.nworkers {
             let worker = Worker::new(
                 i as i64,
@@ -199,9 +207,13 @@ where
 
         self.n_active_workers = self.workers.len() as i64;
         while self.n_active_workers > 0 {
-            for worker in self.workers.values_mut() {
-                worker.run();
+            for (_, worker) in self.workers.drain() {
+                spawn(move || {
+                    worker.run();
+                    worker
+                });
             }
+            self.update_state();
         }
     }
 }

@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::collections::LinkedList;
 use std::sync::{Arc, RwLock};
 
-pub struct Vertex<'a, V, E, M>
+pub struct Vertex<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
     pub id: i64,
     pub value: Option<V>,
-    pub context: Arc<RwLock<Context<'a, V, E, M>>>,
+    pub context: Arc<RwLock<Context<V, E, M>>>,
     active: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
     odd_recv_queue: LinkedList<M>,
@@ -21,13 +21,13 @@ where
     pub send_queue: RefCell<LinkedList<Message<M>>>,
 }
 
-impl<'a, V, E, M> Vertex<'a, V, E, M>
+impl<V, E, M> Vertex<V, E, M>
 where
-    V: Send + Sync,
-    E: Send + Sync,
-    M: Send + Sync + Clone,
+    V: 'static + Send + Sync,
+    E: 'static + Send + Sync,
+    M: 'static + Send + Sync + Clone,
 {
-    pub fn new(id: i64, context: Arc<RwLock<Context<'a, V, E, M>>>) -> Self {
+    pub fn new(id: i64, context: Arc<RwLock<Context<V, E, M>>>) -> Self {
         Vertex {
             id,
             value: None,
