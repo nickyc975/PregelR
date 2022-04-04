@@ -1,5 +1,3 @@
-use super::aggregate::Aggregate;
-use super::combine::Combine;
 use super::context::Context;
 use super::message::{ChannelMessage, Message};
 use super::state::State;
@@ -8,12 +6,11 @@ use std::collections::{HashMap, LinkedList};
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::fs;
+use std::fs::File;
+use std::io::{self, BufRead};
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::time::Instant;
-
-static SEND_THRESHOLD: i32 = 10;
 
 pub struct Worker<'a, V, E, M>
 where
@@ -23,11 +20,12 @@ where
     pub time_cost: u128,
     pub n_msg_sent: i64,
     pub n_msg_recv: i64,
-    n_active_vertices: i64,
+    pub n_active_vertices: i64,
     context: &'a Context<V, E, M>,
     vertices: Mutex<HashMap<i64, Vertex<'a, V, E, M>>>,
     sender: Sender<ChannelMessage<M>>,
     aggregated_values: RefCell<HashMap<String, Box<dyn Any>>>,
+    send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
 
 impl<'a, V, E, M> Worker<'a, V, E, M>
@@ -45,6 +43,7 @@ where
             n_active_vertices: 0,
             vertices: Mutex::new(HashMap::new()),
             aggregated_values: RefCell::new(HashMap::new()),
+            send_queues: RefCell::new(HashMap::new()),
         }
     }
 
@@ -70,22 +69,18 @@ where
     }
 
     pub fn receive_message(&mut self, message: Message<M>) {
-        match self.vertices.lock() {
-            Ok(mut vertices) => match vertices.get_mut(&message.receiver) {
-                Some(vertex) => {
-                    let value = match (
-                        self.context.combiner.as_ref(),
-                        vertex.read_next_step_message(),
-                    ) {
-                        (Some(combiner), Some(init)) => combiner.combine(init, message.value),
-                        _ => message.value,
-                    };
-                    vertex.receive_message(value);
-                    self.n_msg_recv += 1;
-                }
-                None => (),
-            },
-            Err(_) => (),
+        if let Ok(mut vertices) = self.vertices.lock() {
+            if let Some(vertex) = vertices.get_mut(&message.receiver) {
+                let value = match (
+                    self.context.combiner.as_ref(),
+                    vertex.read_next_step_message(),
+                ) {
+                    (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                    _ => message.value,
+                };
+                vertex.receive_message(value);
+                self.n_msg_recv += 1;
+            }
         }
     }
 
@@ -104,7 +99,8 @@ where
             State::INITIALIZED => self.load(),
             State::LOADED => self.clean(),
             State::CLEANED => self.compute(),
-            State::COMPUTED => self.clean(),
+            State::COMPUTED => self.communicate(),
+            State::COMMUNICATED => self.clean(),
         }
         self.time_cost = now.elapsed().as_millis();
     }
@@ -119,20 +115,80 @@ where
         self.n_msg_sent = 0;
     }
 
-    fn load_edges(&mut self) {}
+    fn load_edges(&mut self) {
+        match (
+            self.context.edges_path.as_ref(),
+            self.context.edge_parser.as_ref(),
+        ) {
+            (Some(path), Some(parser)) => {
+                let file = match File::open(path) {
+                    Ok(file) => file,
+                    Err(err) => panic!("Failed to open edges file: {}", err),
+                };
 
-    fn load_vertices(&mut self) {}
+                for line in io::BufReader::new(file).lines() {
+                    if let Ok(line) = line {
+                        let (source, target, edge) = parser(line);
+                        match self.vertices.lock() {
+                            Ok(mut vertices) => {
+                                let vertex = vertices
+                                    .entry(source)
+                                    .or_insert(Vertex::new(source, self.context));
+
+                                if !vertex.has_outer_edge_to(target) {
+                                    vertex.add_outer_edge((source, target, edge));
+                                } else {
+                                    eprintln!(
+                                        "Warning: duplicate edge from {} to %{}!",
+                                        source, target
+                                    );
+                                }
+
+                                match self.sender.send(ChannelMessage::Vtx(target)) {
+                                    _ => (),
+                                }
+                            }
+                            Err(_) => (),
+                        }
+                    }
+                }
+            }
+            _ => (),
+        }
+    }
+
+    fn load_vertices(&mut self) {
+        match (
+            self.context.vertices_path.as_ref(),
+            self.context.vertex_parser.as_ref(),
+        ) {
+            (Some(path), Some(parser)) => {
+                let file = match File::open(path) {
+                    Ok(file) => file,
+                    Err(err) => panic!("Failed to open vertices file: {}", err),
+                };
+
+                for line in io::BufReader::new(file).lines() {
+                    if let Ok(line) = line {
+                        let (id, value) = parser(line);
+                        match self.vertices.lock() {
+                            Ok(mut vertices) => {
+                                let vertex =
+                                    vertices.entry(id).or_insert(Vertex::new(id, self.context));
+                                vertex.value = Some(value);
+                            }
+                            Err(_) => (),
+                        }
+                    }
+                }
+            }
+            _ => (),
+        }
+    }
 
     fn load(&mut self) {
-        match self.context.edge_parser.as_ref() {
-            Some(_) => self.load_edges(),
-            None => (),
-        }
-
-        match self.context.vertex_parser.as_ref() {
-            Some(_) => self.load_vertices(),
-            None => (),
-        }
+        self.load_edges();
+        self.load_vertices();
     }
 
     fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
@@ -151,27 +207,19 @@ where
     }
 
     fn send_messages_of(&self, vertex: &Vertex<V, E, M>) {
-        let send_queue = vertex.send_queue.borrow_mut();
-        // let receiver = message.receiver;
-        // let mut queues = self.send_queues.borrow_mut();
-        // let queue_op = match queues.get_mut(&receiver) {
-        //     Some(queue) => Some(queue),
-        //     None => {
-        //         queues.insert(receiver, LinkedList::new());
-        //         queues.get_mut(&receiver)
-        //     }
-        // };
+        let mut send_queue = vertex.send_queue.borrow_mut();
+        while let Some(mut message) = send_queue.pop_front() {
+            let receiver = message.receiver;
+            let mut queues = self.send_queues.borrow_mut();
+            let queue = queues.entry(receiver).or_insert(LinkedList::new());
 
-        // let queue = queue_op.unwrap();
-        // let initial_op = queue.pop_front();
-        // message.value = match (self.combiner, &initial_op) {
-        //     (Some(combine), Some(initial)) => combine.combine(&message.value, &initial.value),
-        //     _ => message.value,
-        // };
-        // queue.push_back(message);
-        // if queue.len() > SEND_THRESHOLD as usize {
-        //     self.send_messages(queue);
-        // }
+            message.value = match (self.context.combiner.as_ref(), queue.pop_front()) {
+                (Some(combine), Some(initial)) => combine.combine(message.value, initial.value),
+                _ => message.value,
+            };
+
+            queue.push_back(message);
+        }
     }
 
     fn compute(&mut self) {
@@ -190,6 +238,17 @@ where
                 }
             }
             Err(_) => (),
+        }
+    }
+
+    fn communicate(&mut self) {
+        let mut send_queues = self.send_queues.borrow_mut();
+        for (_, mut send_queue) in send_queues.drain() {
+            while let Some(message) = send_queue.pop_front() {
+                match self.sender.send(ChannelMessage::Msg(message)) {
+                    _ => (),
+                }
+            }
         }
     }
 }

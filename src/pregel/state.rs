@@ -1,14 +1,15 @@
 /**
  * Global state.
  *
- * INITIALIZED ---> LOADED ---> CLEANED ---> COMPUTED
- *                                 ^            |
- *                                 |            |
- *                                  ------------
+ * INITIALIZED ---> LOADED ---> CLEANED ---> COMPUTED ---> COMMUNICATED
+ *                                 ^                            |
+ *                                 |                            |
+ *                                  ----------------------------
  */
 pub enum State {
-    INITIALIZED, // the master is just created.
-    LOADED,      // workers loaded data.
-    CLEANED,     // workers did clean up before compute.
-    COMPUTED,    // workers finished one superstep.
+    INITIALIZED,  // the master is just created.
+    LOADED,       // workers loaded data.
+    CLEANED,      // workers did clean up before compute.
+    COMPUTED,     // workers finished computing.
+    COMMUNICATED, // works finished one superstep.
 }
