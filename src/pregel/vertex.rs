@@ -1,5 +1,6 @@
 use super::context::Context;
 use super::message::Message;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::LinkedList;
@@ -7,9 +8,9 @@ use std::sync::{Arc, RwLock};
 
 pub struct Vertex<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     pub id: i64,
     pub value: Option<V>,
@@ -23,9 +24,9 @@ where
 
 impl<V, E, M> Vertex<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     pub fn new(id: i64, context: Arc<RwLock<Context<V, E, M>>>) -> Self {
         Vertex {

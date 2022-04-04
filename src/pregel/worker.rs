@@ -2,11 +2,12 @@ use super::context::Context;
 use super::message::{ChannelMessage, Message};
 use super::state::State;
 use super::vertex::Vertex;
-use std::collections::{HashMap, LinkedList};
 
 use std::cell::RefCell;
+use std::collections::{HashMap, LinkedList};
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
@@ -14,17 +15,17 @@ use std::time::Instant;
 
 pub struct Worker<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     pub id: i64,
     pub time_cost: RefCell<u128>,
     pub n_msg_sent: RefCell<i64>,
     pub n_msg_recv: RefCell<i64>,
     pub n_active_vertices: RefCell<i64>,
-    edges_path: Option<String>,
-    vertices_path: Option<String>,
+    pub edges_path: Option<PathBuf>,
+    pub vertices_path: Option<PathBuf>,
     context: Arc<RwLock<Context<V, E, M>>>,
     vertices: Mutex<HashMap<i64, Vertex<V, E, M>>>,
     sender: Sender<ChannelMessage<M>>,
@@ -34,23 +35,21 @@ where
 
 impl<V, E, M> Worker<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     pub fn new(
         id: i64,
-        edges_path: Option<String>,
-        vertices_path: Option<String>,
         context: Arc<RwLock<Context<V, E, M>>>,
         sender: Sender<ChannelMessage<M>>,
     ) -> Self {
         Worker {
             id,
-            edges_path,
-            vertices_path,
             context,
             sender,
+            edges_path: None,
+            vertices_path: None,
             time_cost: RefCell::new(0),
             n_msg_sent: RefCell::new(0),
             n_msg_recv: RefCell::new(0),
@@ -119,6 +118,7 @@ where
             State::COMMUNICATED => self.clean(),
         }
         *self.time_cost.borrow_mut() = now.elapsed().as_millis();
+        self.sender.send(ChannelMessage::Hlt).unwrap();
     }
 
     pub fn report(&self, name: &String) -> Option<Box<dyn Send + Sync>> {

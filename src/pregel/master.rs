@@ -1,26 +1,28 @@
 use super::aggregate::Aggregate;
 use super::combine::Combine;
 use super::context::Context;
-use super::message::{ChannelMessage, Message};
+use super::message::ChannelMessage;
 use super::state::State;
 use super::vertex::Vertex;
 use super::worker::Worker;
-use std::cell::RefCell;
+
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread::spawn;
 
 pub struct Master<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     nworkers: i64,
     n_active_workers: i64,
+    edges_path: Option<PathBuf>,
+    vertices_path: Option<PathBuf>,
     workers: HashMap<i64, Worker<V, E, M>>,
     context: Arc<RwLock<Context<V, E, M>>>,
     sender: mpsc::Sender<ChannelMessage<M>>,
@@ -29,22 +31,21 @@ where
 
 impl<V, E, M> Master<V, E, M>
 where
-    V: 'static + Send + Sync,
-    E: 'static + Send + Sync,
-    M: 'static + Send + Sync + Clone,
+    V: 'static + Send,
+    E: 'static + Send,
+    M: 'static + Send + Clone,
 {
     pub fn new(
         nworkers: i64,
-        compute: Box<dyn Fn(&mut Vertex<V, E, M>)>,
-        work_path: String,
+        compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
+        work_path: &Path,
     ) -> Self {
-        let path = Path::new(&work_path);
         let (sender, receiver) = mpsc::channel();
 
-        if path.exists() {
-            panic!("Work path {} exists!", work_path);
+        if work_path.exists() {
+            panic!("Work path {} exists!", work_path.to_string_lossy());
         } else {
-            match fs::create_dir_all(path) {
+            match fs::create_dir_all(work_path) {
                 Ok(_) => (),
                 Err(err) => panic!("Failed to create the work path: {}", err),
             }
@@ -53,8 +54,10 @@ where
         Master {
             nworkers,
             n_active_workers: 0,
+            edges_path: None,
+            vertices_path: None,
             workers: HashMap::new(),
-            context: Arc::new(RwLock::new(Context::new(compute, work_path))),
+            context: Arc::new(RwLock::new(Context::new(compute, work_path.join("")))),
             sender,
             receiver,
         }
@@ -62,7 +65,7 @@ where
 
     pub fn set_edge_parser(
         &mut self,
-        edge_parser: Box<dyn Fn(&String) -> (i64, i64, E)>,
+        edge_parser: Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>,
     ) -> &mut Self {
         self.context.write().unwrap().edge_parser = Some(edge_parser);
         self
@@ -70,7 +73,7 @@ where
 
     pub fn set_vertex_parser(
         &mut self,
-        vertex_parser: Box<dyn Fn(&String) -> (i64, V)>,
+        vertex_parser: Box<dyn Fn(&String) -> (i64, V) + Send + Sync>,
     ) -> &mut Self {
         self.context.write().unwrap().vertex_parser = Some(vertex_parser);
         self
@@ -122,8 +125,8 @@ where
                 } else {
                     self.cal_index_for_vertex(&line)
                 };
-                writers[index].write_all(line.as_bytes()).unwrap();
-                writers[index].write_all("\n".as_bytes()).unwrap();
+                writers[index].write_all(line.as_bytes())?;
+                writers[index].write_all("\n".as_bytes())?;
             }
         }
 
@@ -134,14 +137,13 @@ where
         let context = self.context.read().unwrap();
         let edges_path = Path::new(&context.work_path).join("graph").join("parts");
 
-        match (
-            context.edge_parser.as_ref(),
-            fs::create_dir_all(&edges_path),
-        ) {
-            (Some(_), Ok(())) => {
-                let _ = self.partition(path, &edges_path, true);
+        match context.edge_parser.as_ref() {
+            Some(_) => {
+                fs::create_dir_all(&edges_path).unwrap();
+                self.partition(path, &edges_path, true).unwrap();
+                self.edges_path = Some(edges_path);
             }
-            _ => (),
+            None => (),
         }
     }
 
@@ -149,20 +151,19 @@ where
         let context = self.context.read().unwrap();
         let vertices_path = Path::new(&context.work_path).join("vertices").join("parts");
 
-        match (
-            context.vertex_parser.as_ref(),
-            fs::create_dir_all(&vertices_path),
-        ) {
-            (Some(_), Ok(())) => {
-                let _ = self.partition(path, &vertices_path, false);
+        match context.vertex_parser.as_ref() {
+            Some(_) => {
+                fs::create_dir_all(&vertices_path).unwrap();
+                self.partition(path, &vertices_path, false).unwrap();
+                self.vertices_path = Some(vertices_path);
             }
-            _ => (),
+            None => (),
         }
     }
 
     fn aggregate(&self) {
         let context = self.context.write().unwrap();
-        let mut values_mut = context.aggregated_values.borrow_mut();
+        let mut values_mut = context.aggregated_values.write().unwrap();
         values_mut.clear();
 
         for (name, aggregator) in context.aggregators.iter() {
@@ -195,24 +196,70 @@ where
 
     pub fn run(&mut self) {
         for i in 0..self.nworkers {
-            let worker = Worker::new(
-                i as i64,
-                None,
-                None,
-                Arc::clone(&self.context),
-                self.sender.clone(),
-            );
+            let mut worker = Worker::new(i as i64, Arc::clone(&self.context), self.sender.clone());
+
+            worker.edges_path = match self.edges_path.as_ref() {
+                Some(path) => Some(path.join(i.to_string()).join(".txt")),
+                None => None,
+            };
+
+            worker.vertices_path = match self.vertices_path.as_ref() {
+                Some(path) => Some(path.join(i.to_string()).join(".txt")),
+                None => None,
+            };
+
             self.workers.insert(i as i64, worker);
         }
 
         self.n_active_workers = self.workers.len() as i64;
         while self.n_active_workers > 0 {
+            let mut handles = Vec::new();
+            let mut n_running_workers = self.workers.len() as i64;
+
             for (_, worker) in self.workers.drain() {
-                spawn(move || {
+                handles.push(spawn(move || {
                     worker.run();
                     worker
-                });
+                }));
             }
+
+            for handle in handles {
+                match handle.join() {
+                    Ok(worker) => {
+                        if *worker.n_active_vertices.borrow() <= 0 {
+                            self.n_active_workers -= 1;
+                        }
+                        self.workers.insert(worker.id, worker);
+                    }
+                    Err(_) => (),
+                }
+            }
+
+            for message in &self.receiver {
+                match message {
+                    ChannelMessage::Msg(msg) => {
+                        let index = msg.receiver % self.workers.len() as i64;
+                        match self.workers.get_mut(&index) {
+                            Some(worker) => worker.receive_message(msg),
+                            None => (),
+                        }
+                    }
+                    ChannelMessage::Vtx(id) => {
+                        let index = id % self.workers.len() as i64;
+                        match self.workers.get_mut(&index) {
+                            Some(worker) => worker.add_vertex(id),
+                            None => (),
+                        }
+                    }
+                    ChannelMessage::Hlt => {
+                        n_running_workers -= 1;
+                        if n_running_workers <= 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+
             self.update_state();
         }
     }
