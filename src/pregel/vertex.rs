@@ -3,14 +3,17 @@ use super::message::Message;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::LinkedList;
+use std::sync::{Arc, RwLock};
 
 pub struct Vertex<'a, V, E, M>
 where
-    M: Clone,
+    V: Send + Sync,
+    E: Send + Sync,
+    M: Send + Sync + Clone,
 {
     pub id: i64,
     pub value: Option<V>,
-    pub context: &'a Context<V, E, M>,
+    pub context: Arc<RwLock<Context<'a, V, E, M>>>,
     active: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
     odd_recv_queue: LinkedList<M>,
@@ -20,9 +23,11 @@ where
 
 impl<'a, V, E, M> Vertex<'a, V, E, M>
 where
-    M: Clone,
+    V: Send + Sync,
+    E: Send + Sync,
+    M: Send + Sync + Clone,
 {
-    pub fn new(id: i64, context: &'a Context<V, E, M>) -> Self {
+    pub fn new(id: i64, context: Arc<RwLock<Context<'a, V, E, M>>>) -> Self {
         Vertex {
             id,
             value: None,
@@ -81,7 +86,7 @@ where
     }
 
     pub fn has_messages(&self) -> bool {
-        if self.context.superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep & 2 == 0 {
             !self.odd_recv_queue.is_empty()
         } else {
             !self.even_recv_queue.is_empty()
@@ -89,7 +94,7 @@ where
     }
 
     pub fn read_message(&mut self) -> Option<M> {
-        if self.context.superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep & 2 == 0 {
             self.odd_recv_queue.pop_front()
         } else {
             self.even_recv_queue.pop_front()
@@ -97,7 +102,7 @@ where
     }
 
     pub fn receive_message(&mut self, message: M) {
-        if self.context.superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep & 2 == 0 {
             self.odd_recv_queue.push_back(message);
         } else {
             self.even_recv_queue.push_back(message);
@@ -105,7 +110,7 @@ where
     }
 
     pub fn has_next_step_message(&self) -> bool {
-        if self.context.superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep & 2 == 0 {
             !self.even_recv_queue.is_empty()
         } else {
             !self.odd_recv_queue.is_empty()
@@ -113,7 +118,7 @@ where
     }
 
     pub fn read_next_step_message(&mut self) -> Option<M> {
-        if self.context.superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep & 2 == 0 {
             self.even_recv_queue.pop_front()
         } else {
             self.odd_recv_queue.pop_front()

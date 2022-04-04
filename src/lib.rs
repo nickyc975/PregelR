@@ -3,8 +3,8 @@ pub mod pregel {
     pub mod combine;
     pub mod master;
     pub mod vertex;
+    pub mod context;
 
-    mod context;
     mod message;
     mod state;
     mod worker;

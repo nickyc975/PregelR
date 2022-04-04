@@ -8,33 +8,50 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
+use std::thread::spawn;
 use std::time::Instant;
 
 pub struct Worker<'a, V, E, M>
 where
-    M: Clone,
+    V: Send + Sync,
+    E: Send + Sync,
+    M: Send + Sync + Clone,
 {
     pub id: i64,
     pub time_cost: u128,
     pub n_msg_sent: i64,
     pub n_msg_recv: i64,
     pub n_active_vertices: i64,
-    context: &'a Context<V, E, M>,
+    edges_path: Option<String>,
+    vertices_path: Option<String>,
+    context: Arc<RwLock<Context<'a, V, E, M>>>,
     vertices: Mutex<HashMap<i64, Vertex<'a, V, E, M>>>,
     sender: Sender<ChannelMessage<M>>,
-    aggregated_values: RefCell<HashMap<String, Box<dyn Any>>>,
+    aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
 
 impl<'a, V, E, M> Worker<'a, V, E, M>
 where
-    M: Clone,
+    V: Send + Sync,
+    E: Send + Sync,
+    M: Send + Sync + Clone,
 {
-    pub fn new(id: i64, context: &'a Context<V, E, M>, sender: Sender<ChannelMessage<M>>) -> Self {
+    pub fn new(
+        id: i64,
+        edges_path: Option<String>,
+        vertices_path: Option<String>,
+        context: Arc<RwLock<Context<'a, V, E, M>>>,
+        sender: Sender<ChannelMessage<M>>,
+    ) -> Self {
         Worker {
             id,
+            edges_path,
+            vertices_path,
             context,
             sender,
             time_cost: 0,
@@ -72,7 +89,7 @@ where
         if let Ok(mut vertices) = self.vertices.lock() {
             if let Some(vertex) = vertices.get_mut(&message.receiver) {
                 let value = match (
-                    self.context.combiner.as_ref(),
+                    self.context.read().unwrap().combiner.as_ref(),
                     vertex.read_next_step_message(),
                 ) {
                     (Some(combiner), Some(init)) => combiner.combine(init, message.value),
@@ -87,25 +104,29 @@ where
     pub fn add_vertex(&mut self, id: i64) {
         match self.vertices.lock() {
             Ok(mut vertices) => {
-                vertices.entry(id).or_insert(Vertex::new(id, self.context));
+                vertices
+                    .entry(id)
+                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
             }
             Err(_) => (),
         }
     }
 
     pub fn run(&mut self) {
-        let now = Instant::now();
-        match self.context.state {
-            State::INITIALIZED => self.load(),
-            State::LOADED => self.clean(),
-            State::CLEANED => self.compute(),
-            State::COMPUTED => self.communicate(),
-            State::COMMUNICATED => self.clean(),
-        }
-        self.time_cost = now.elapsed().as_millis();
+        spawn(move || {
+            let now = Instant::now();
+            match self.context.read().unwrap().state {
+                State::INITIALIZED => self.load(),
+                State::LOADED => self.clean(),
+                State::CLEANED => self.compute(),
+                State::COMPUTED => self.communicate(),
+                State::COMMUNICATED => self.clean(),
+            }
+            self.time_cost = now.elapsed().as_millis();
+        });
     }
 
-    pub fn report(&self, name: &String) -> Option<Box<dyn Any>> {
+    pub fn report(&self, name: &String) -> Option<Box<dyn Send + Sync>> {
         self.aggregated_values.borrow_mut().remove(name)
     }
 
@@ -116,10 +137,7 @@ where
     }
 
     fn load_edges(&mut self) {
-        match (
-            self.context.edges_path.as_ref(),
-            self.context.edge_parser.as_ref(),
-        ) {
+        match (self.edges_path, self.context.read().unwrap().edge_parser) {
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
@@ -128,12 +146,12 @@ where
 
                 for line in io::BufReader::new(file).lines() {
                     if let Ok(line) = line {
-                        let (source, target, edge) = parser(line);
+                        let (source, target, edge) = parser(&line);
                         match self.vertices.lock() {
                             Ok(mut vertices) => {
                                 let vertex = vertices
                                     .entry(source)
-                                    .or_insert(Vertex::new(source, self.context));
+                                    .or_insert(Vertex::new(source, Arc::clone(&self.context)));
 
                                 if !vertex.has_outer_edge_to(target) {
                                     vertex.add_outer_edge((source, target, edge));
@@ -159,8 +177,8 @@ where
 
     fn load_vertices(&mut self) {
         match (
-            self.context.vertices_path.as_ref(),
-            self.context.vertex_parser.as_ref(),
+            self.vertices_path,
+            self.context.read().unwrap().vertex_parser,
         ) {
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
@@ -170,11 +188,12 @@ where
 
                 for line in io::BufReader::new(file).lines() {
                     if let Ok(line) = line {
-                        let (id, value) = parser(line);
+                        let (id, value) = parser(&line);
                         match self.vertices.lock() {
                             Ok(mut vertices) => {
-                                let vertex =
-                                    vertices.entry(id).or_insert(Vertex::new(id, self.context));
+                                let vertex = vertices
+                                    .entry(id)
+                                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
                                 vertex.value = Some(value);
                             }
                             Err(_) => (),
@@ -192,7 +211,7 @@ where
     }
 
     fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
-        match self.context.aggregators.get(name) {
+        match self.context.read().unwrap().aggregators.get(name) {
             Some(aggregator) => {
                 let new_val = aggregator.report(vertex);
                 let mut values_mut = self.aggregated_values.borrow_mut();
@@ -213,7 +232,10 @@ where
             let mut queues = self.send_queues.borrow_mut();
             let queue = queues.entry(receiver).or_insert(LinkedList::new());
 
-            message.value = match (self.context.combiner.as_ref(), queue.pop_front()) {
+            message.value = match (
+                self.context.read().unwrap().combiner.as_ref(),
+                queue.pop_front(),
+            ) {
                 (Some(combine), Some(initial)) => combine.combine(message.value, initial.value),
                 _ => message.value,
             };
@@ -227,9 +249,9 @@ where
             Ok(mut vertices) => {
                 self.n_active_vertices = vertices.len() as i64;
                 for vertex in vertices.values_mut() {
-                    (self.context.compute)(vertex);
+                    (self.context.read().unwrap().compute)(vertex);
 
-                    for name in self.context.aggregators.keys() {
+                    for name in self.context.read().unwrap().aggregators.keys() {
                         self.aggregate(name, vertex);
                     }
 
