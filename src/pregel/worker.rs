@@ -139,7 +139,7 @@ where
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
-                    Err(err) => panic!("Failed to open edges file: {}", err),
+                    Err(err) => panic!("Failed to open edges file at {}: {}", path.to_string_lossy(), err),
                 };
 
                 for line in io::BufReader::new(file).lines() {
@@ -181,7 +181,7 @@ where
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
-                    Err(err) => panic!("Failed to open vertices file: {}", err),
+                    Err(err) => panic!("Failed to open vertices file at {}: {}", path.to_string_lossy(), err),
                 };
 
                 for line in io::BufReader::new(file).lines() {

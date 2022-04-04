@@ -115,7 +115,7 @@ where
     ) -> io::Result<()> {
         let reader = io::BufReader::new(File::open(input_dir)?);
         let mut writers: Vec<File> = (0..self.nworkers)
-            .map(|i| File::open(Path::new(output_dir).join(i.to_string())).unwrap())
+            .map(|i| File::create(Path::new(output_dir).join(format!("{}.txt", i))).unwrap())
             .collect();
 
         for line in reader.lines() {
@@ -199,12 +199,12 @@ where
             let mut worker = Worker::new(i as i64, Arc::clone(&self.context), self.sender.clone());
 
             worker.edges_path = match self.edges_path.as_ref() {
-                Some(path) => Some(path.join(i.to_string()).join(".txt")),
+                Some(path) => Some(path.join(format!("{}.txt", i))),
                 None => None,
             };
 
             worker.vertices_path = match self.vertices_path.as_ref() {
-                Some(path) => Some(path.join(i.to_string()).join(".txt")),
+                Some(path) => Some(path.join(format!("{}.txt", i))),
                 None => None,
             };
 
