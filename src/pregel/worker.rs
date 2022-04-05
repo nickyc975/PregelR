@@ -1,3 +1,4 @@
+use super::aggregate::AggVal;
 use super::channel::{Channel, ChannelMessage};
 use super::context::Context;
 use super::message::Message;
@@ -29,7 +30,7 @@ where
 
     channel: Channel<M>,
     context: Arc<RwLock<Context<V, E, M>>>,
-    aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
+    aggregated_values: RefCell<HashMap<String, AggVal>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
 
@@ -114,7 +115,7 @@ where
         *self.time_cost.borrow_mut() = now.elapsed().as_millis();
     }
 
-    pub fn report(&self, name: &String) -> Option<Box<dyn Send + Sync>> {
+    pub fn report(&self, name: &String) -> Option<AggVal> {
         self.aggregated_values.borrow_mut().remove(name)
     }
 

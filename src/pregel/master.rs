@@ -25,7 +25,7 @@ where
     edges_path: Option<PathBuf>,
     vertices_path: Option<PathBuf>,
     workers: HashMap<i64, Worker<V, E, M>>,
-    context: Arc<RwLock<Context<V, E, M>>>,
+    pub context: Arc<RwLock<Context<V, E, M>>>,
 }
 
 impl<V, E, M> Master<V, E, M>
@@ -164,6 +164,8 @@ where
         match context.aggregated_values.write() {
             Ok(mut aggregated_values) => {
                 println!("Superstep: {}", context.superstep);
+
+                aggregated_values.clear();
                 for worker in self.workers.values() {
                     println!(
                         "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, \
@@ -274,5 +276,21 @@ where
         }
 
         println!("Total time cost: {} ms", now.elapsed().as_millis());
+    }
+
+    pub fn take_aggregated_value<T: 'static>(&self, name: &String) -> Option<T> {
+        match self.context.write() {
+            Ok(context) => match context.aggregated_values.write() {
+                Ok(mut aggregated_values) => match aggregated_values.remove(name) {
+                    Some(value_box) => match value_box.downcast::<T>() {
+                        Ok(value) => Some(*value),
+                        Err(_) => None,
+                    },
+                    None => None,
+                },
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
     }
 }

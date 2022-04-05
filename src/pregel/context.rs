@@ -1,4 +1,4 @@
-use super::aggregate::Aggregate;
+use super::aggregate::{AggVal, Aggregate};
 use super::combine::Combine;
 use super::state::State;
 use super::vertex::Vertex;
@@ -27,7 +27,7 @@ where
 
     pub combiner: Option<Box<dyn Combine<M>>>,
     pub aggregators: HashMap<String, Box<dyn Aggregate<V, E, M>>>,
-    pub aggregated_values: RwLock<HashMap<String, Box<dyn Send + Sync>>>,
+    pub aggregated_values: RwLock<HashMap<String, AggVal>>,
 }
 
 impl<V, E, M> Context<V, E, M>
