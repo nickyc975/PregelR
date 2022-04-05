@@ -9,7 +9,6 @@ use std::collections::{HashMap, LinkedList};
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -26,10 +25,10 @@ where
     pub n_active_vertices: RefCell<i64>,
     pub edges_path: Option<PathBuf>,
     pub vertices_path: Option<PathBuf>,
+    pub vertices: RefCell<HashMap<i64, Vertex<V, E, M>>>,
 
     channel: Channel<M>,
     context: Arc<RwLock<Context<V, E, M>>>,
-    vertices: Mutex<HashMap<i64, Vertex<V, E, M>>>,
     aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
@@ -51,58 +50,43 @@ where
             n_msg_sent: RefCell::new(0),
             n_msg_recv: RefCell::new(0),
             n_active_vertices: RefCell::new(0),
-            vertices: Mutex::new(HashMap::new()),
+            vertices: RefCell::new(HashMap::new()),
             aggregated_values: RefCell::new(HashMap::new()),
             send_queues: RefCell::new(HashMap::new()),
         }
     }
 
     pub fn local_n_vertices(&self) -> i64 {
-        match self.vertices.lock() {
-            Ok(vertices) => vertices.len() as i64,
-            Err(_) => 0,
-        }
+        self.vertices.borrow().len() as i64
     }
 
     pub fn local_n_edges(&self) -> i64 {
-        match self.vertices.lock() {
-            Ok(vertices) => {
-                let mut sum = 0_i64;
-                for v in vertices.values() {
-                    sum += v.get_outer_edges().len() as i64;
-                }
-                drop(vertices);
-                sum
-            }
-            Err(_) => 0,
+        let mut sum = 0_i64;
+        for v in self.vertices.borrow().values() {
+            sum += v.get_outer_edges().len() as i64;
         }
+        sum
     }
 
     fn receive_message(&self, message: Message<M>) {
-        if let Ok(mut vertices) = self.vertices.lock() {
-            if let Some(vertex) = vertices.get_mut(&message.receiver) {
-                let value = match (
-                    self.context.read().unwrap().combiner.as_ref(),
-                    vertex.read_next_step_message(),
-                ) {
-                    (Some(combiner), Some(init)) => combiner.combine(init, message.value),
-                    _ => message.value,
-                };
-                vertex.receive_message(value);
-                *self.n_msg_recv.borrow_mut() += 1;
-            }
+        if let Some(vertex) = self.vertices.borrow_mut().get_mut(&message.receiver) {
+            let value = match (
+                self.context.read().unwrap().combiner.as_ref(),
+                vertex.read_next_step_message(),
+            ) {
+                (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                _ => message.value,
+            };
+            vertex.receive_message(value);
+            *self.n_msg_recv.borrow_mut() += 1;
         }
     }
 
     fn add_vertex(&self, id: i64) {
-        match self.vertices.lock() {
-            Ok(mut vertices) => {
-                vertices
-                    .entry(id)
-                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
-            }
-            Err(_) => (),
-        }
+        self.vertices
+            .borrow_mut()
+            .entry(id)
+            .or_insert(Vertex::new(id, Arc::clone(&self.context)));
     }
 
     pub fn run(&self) {
@@ -154,25 +138,22 @@ where
             ),
         };
 
+        let mut vertices = self.vertices.borrow_mut();
         for line in io::BufReader::new(file).lines() {
             if let Ok(line) = line {
                 let (source, target, edge) = parser(&line);
-                match self.vertices.lock() {
-                    Ok(mut vertices) => {
-                        let vertex = vertices
-                            .entry(source)
-                            .or_insert(Vertex::new(source, Arc::clone(&self.context)));
 
-                        if !vertex.has_outer_edge_to(target) {
-                            vertex.add_outer_edge((source, target, edge));
-                        } else {
-                            eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
-                        }
+                let vertex = vertices
+                    .entry(source)
+                    .or_insert(Vertex::new(source, Arc::clone(&self.context)));
 
-                        self.channel.send(ChannelMessage::Vtx(target)).unwrap();
-                    }
-                    Err(_) => (),
+                if !vertex.has_outer_edge_to(target) {
+                    vertex.add_outer_edge((source, target, edge));
+                } else {
+                    eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
                 }
+
+                self.channel.send(ChannelMessage::Vtx(target)).unwrap();
             }
         }
     }
@@ -187,18 +168,14 @@ where
             ),
         };
 
+        let mut vertices = self.vertices.borrow_mut();
         for line in io::BufReader::new(file).lines() {
             if let Ok(line) = line {
                 let (id, value) = parser(&line);
-                match self.vertices.lock() {
-                    Ok(mut vertices) => {
-                        let vertex = vertices
-                            .entry(id)
-                            .or_insert(Vertex::new(id, Arc::clone(&self.context)));
-                        vertex.value = Some(value);
-                    }
-                    Err(_) => (),
-                }
+                let vertex = vertices
+                    .entry(id)
+                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
+                vertex.value = Some(value);
             }
         }
     }
@@ -220,12 +197,7 @@ where
             _ => (),
         }
 
-        match self.vertices.lock() {
-            Ok(vertices) => {
-                *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
-            }
-            Err(_) => (),
-        }
+        *self.n_active_vertices.borrow_mut() = self.vertices.borrow().len() as i64;
     }
 
     fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
@@ -263,37 +235,32 @@ where
     }
 
     fn compute(&self) {
-        match self.vertices.lock() {
-            Ok(mut vertices) => {
-                *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
-                for vertex in vertices.values_mut() {
-                    vertex.activate();
-                    let context = self.context.read().unwrap();
+        *self.n_active_vertices.borrow_mut() = self.vertices.borrow().len() as i64;
+        for vertex in self.vertices.borrow_mut().values_mut() {
+            vertex.activate();
+            let context = self.context.read().unwrap();
 
-                    (context.compute)(vertex);
+            (context.compute)(vertex);
 
-                    for name in context.aggregators.keys() {
-                        self.aggregate(name, vertex);
-                    }
+            for name in context.aggregators.keys() {
+                self.aggregate(name, vertex);
+            }
 
-                    self.send_messages_of(vertex);
+            self.send_messages_of(vertex);
 
-                    *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
-                }
+            *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
+        }
 
-                let mut send_queues = self.send_queues.borrow_mut();
-                for (_, mut send_queue) in send_queues.drain() {
-                    while let Some(message) = send_queue.pop_front() {
-                        match self.channel.send(ChannelMessage::Msg(message)) {
-                            Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
-                            Err(e) => {
-                                eprintln!("Message sent failed: {}", e);
-                            }
-                        }
+        let mut send_queues = self.send_queues.borrow_mut();
+        for (_, mut send_queue) in send_queues.drain() {
+            while let Some(message) = send_queue.pop_front() {
+                match self.channel.send(ChannelMessage::Msg(message)) {
+                    Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
+                    Err(e) => {
+                        eprintln!("Message sent failed: {}", e);
                     }
                 }
             }
-            Err(_) => (),
         }
     }
 }
