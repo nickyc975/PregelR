@@ -12,6 +12,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock, RwLockWriteGuard};
 use std::thread::spawn;
+use std::time::Instant;
 
 pub struct Master<V, E, M>
 where
@@ -165,7 +166,7 @@ where
                 println!("Superstep: {}", context.superstep);
                 for worker in self.workers.values() {
                     println!(
-                            "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, msg_sent: {}, msg_recv: {}, time_cost: {}",
+                            "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, msg_sent: {}, msg_recv: {}, time_cost: {} ms",
                             worker.id, worker.n_active_vertices.borrow(), worker.local_n_vertices(), worker.local_n_edges(),
                             worker.n_msg_sent.borrow(), worker.n_msg_recv.borrow(),
                             worker.time_cost.borrow()
@@ -230,6 +231,8 @@ where
 
         drop(w_sender);
 
+        let now = Instant::now();
+
         self.n_active_workers = self.nworkers;
         while self.n_active_workers > 0 {
             self.n_active_workers = self.nworkers;
@@ -281,5 +284,7 @@ where
 
             self.update_state();
         }
+
+        println!("Total time cost: {} ms", now.elapsed().as_millis());
     }
 }

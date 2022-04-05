@@ -113,6 +113,7 @@ where
 
     pub fn run(&self) {
         let now = Instant::now();
+
         match self.context.read().unwrap().state {
             State::INITIALIZED => self.load(),
             State::LOADED => self.clean(),
