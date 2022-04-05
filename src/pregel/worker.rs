@@ -275,13 +275,16 @@ where
                 *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
                 for vertex in vertices.values_mut() {
                     vertex.activate();
-                    (self.context.read().unwrap().compute)(vertex);
+                    let context = self.context.read().unwrap();
 
-                    for name in self.context.read().unwrap().aggregators.keys() {
+                    (context.compute)(vertex);
+
+                    for name in context.aggregators.keys() {
                         self.aggregate(name, vertex);
                     }
 
                     self.send_messages_of(vertex);
+
                     *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
                 }
             }

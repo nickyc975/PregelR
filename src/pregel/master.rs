@@ -165,8 +165,8 @@ where
                 println!("Superstep: {}", context.superstep);
                 for worker in self.workers.values() {
                     println!(
-                            "    worker: {}, n_vertices: {}, n_edges: {}, msg_sent: {}, msg_recv: {}, time_cost: {}",
-                            worker.id, worker.local_n_vertices(), worker.local_n_edges(),
+                            "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, msg_sent: {}, msg_recv: {}, time_cost: {}",
+                            worker.id, worker.n_active_vertices.borrow(), worker.local_n_vertices(), worker.local_n_edges(),
                             worker.n_msg_sent.borrow(), worker.n_msg_recv.borrow(),
                             worker.time_cost.borrow()
                         );

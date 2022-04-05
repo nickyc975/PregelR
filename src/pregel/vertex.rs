@@ -87,7 +87,7 @@ where
     }
 
     pub fn has_messages(&self) -> bool {
-        if self.context.read().unwrap().superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep % 2 == 0 {
             !self.odd_recv_queue.is_empty()
         } else {
             !self.even_recv_queue.is_empty()
@@ -95,7 +95,7 @@ where
     }
 
     pub fn read_message(&mut self) -> Option<M> {
-        if self.context.read().unwrap().superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep % 2 == 0 {
             self.odd_recv_queue.pop_front()
         } else {
             self.even_recv_queue.pop_front()
@@ -103,15 +103,15 @@ where
     }
 
     pub fn receive_message(&mut self, message: M) {
-        if self.context.read().unwrap().superstep & 2 == 0 {
-            self.odd_recv_queue.push_back(message);
-        } else {
+        if self.context.read().unwrap().superstep % 2 == 0 {
             self.even_recv_queue.push_back(message);
+        } else {
+            self.odd_recv_queue.push_back(message);
         }
     }
 
     pub fn has_next_step_message(&self) -> bool {
-        if self.context.read().unwrap().superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep % 2 == 0 {
             !self.even_recv_queue.is_empty()
         } else {
             !self.odd_recv_queue.is_empty()
@@ -119,7 +119,7 @@ where
     }
 
     pub fn read_next_step_message(&mut self) -> Option<M> {
-        if self.context.read().unwrap().superstep & 2 == 0 {
+        if self.context.read().unwrap().superstep % 2 == 0 {
             self.even_recv_queue.pop_front()
         } else {
             self.odd_recv_queue.pop_front()
