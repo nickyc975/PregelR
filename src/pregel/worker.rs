@@ -140,87 +140,86 @@ where
         *self.n_msg_sent.borrow_mut() = 0;
     }
 
-    fn load_edges(&self) {
-        match (
-            self.edges_path.as_ref(),
-            self.context.read().unwrap().edge_parser.as_ref(),
-        ) {
-            (Some(path), Some(parser)) => {
-                let file = match File::open(path) {
-                    Ok(file) => file,
-                    Err(err) => panic!(
-                        "Failed to open edges file at {}: {}",
-                        path.to_string_lossy(),
-                        err
-                    ),
-                };
+    fn load_edges(
+        &self,
+        path: &PathBuf,
+        parser: &(dyn Fn(&String) -> (i64, i64, E) + Send + Sync),
+    ) {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(err) => panic!(
+                "Failed to open edges file at {}: {}",
+                path.to_string_lossy(),
+                err
+            ),
+        };
 
-                for line in io::BufReader::new(file).lines() {
-                    if let Ok(line) = line {
-                        let (source, target, edge) = parser(&line);
-                        match self.vertices.lock() {
-                            Ok(mut vertices) => {
-                                let vertex = vertices
-                                    .entry(source)
-                                    .or_insert(Vertex::new(source, Arc::clone(&self.context)));
+        for line in io::BufReader::new(file).lines() {
+            if let Ok(line) = line {
+                let (source, target, edge) = parser(&line);
+                match self.vertices.lock() {
+                    Ok(mut vertices) => {
+                        let vertex = vertices
+                            .entry(source)
+                            .or_insert(Vertex::new(source, Arc::clone(&self.context)));
 
-                                if !vertex.has_outer_edge_to(target) {
-                                    vertex.add_outer_edge((source, target, edge));
-                                } else {
-                                    eprintln!(
-                                        "Warning: duplicate edge from {} to %{}!",
-                                        source, target
-                                    );
-                                }
-
-                                self.channel.send(ChannelMessage::Vtx(target)).unwrap();
-                            }
-                            Err(_) => (),
+                        if !vertex.has_outer_edge_to(target) {
+                            vertex.add_outer_edge((source, target, edge));
+                        } else {
+                            eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
                         }
+
+                        self.channel.send(ChannelMessage::Vtx(target)).unwrap();
                     }
+                    Err(_) => (),
                 }
             }
-            _ => (),
         }
     }
 
-    fn load_vertices(&self) {
-        match (
-            self.vertices_path.as_ref(),
-            self.context.read().unwrap().vertex_parser.as_ref(),
-        ) {
-            (Some(path), Some(parser)) => {
-                let file = match File::open(path) {
-                    Ok(file) => file,
-                    Err(err) => panic!(
-                        "Failed to open vertices file at {}: {}",
-                        path.to_string_lossy(),
-                        err
-                    ),
-                };
+    fn load_vertices(&self, path: &PathBuf, parser: &(dyn Fn(&String) -> (i64, V) + Send + Sync)) {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(err) => panic!(
+                "Failed to open vertices file at {}: {}",
+                path.to_string_lossy(),
+                err
+            ),
+        };
 
-                for line in io::BufReader::new(file).lines() {
-                    if let Ok(line) = line {
-                        let (id, value) = parser(&line);
-                        match self.vertices.lock() {
-                            Ok(mut vertices) => {
-                                let vertex = vertices
-                                    .entry(id)
-                                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
-                                vertex.value = Some(value);
-                            }
-                            Err(_) => (),
-                        }
+        for line in io::BufReader::new(file).lines() {
+            if let Ok(line) = line {
+                let (id, value) = parser(&line);
+                match self.vertices.lock() {
+                    Ok(mut vertices) => {
+                        let vertex = vertices
+                            .entry(id)
+                            .or_insert(Vertex::new(id, Arc::clone(&self.context)));
+                        vertex.value = Some(value);
                     }
+                    Err(_) => (),
                 }
             }
-            _ => (),
         }
     }
 
     fn load(&self) {
-        self.load_edges();
-        self.load_vertices();
+        match (
+            self.edges_path.as_ref(),
+            self.context.read().unwrap().edge_parser.as_ref(),
+        ) {
+            (Some(path), Some(parser)) => self.load_edges(path, parser),
+            _ => (),
+        }
+
+        match (
+            self.vertices_path.as_ref(),
+            self.context.read().unwrap().vertex_parser.as_ref(),
+        ) {
+            (Some(path), Some(parser)) => self.load_vertices(path, parser),
+            _ => (),
+        }
+
         match self.vertices.lock() {
             Ok(vertices) => {
                 *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
