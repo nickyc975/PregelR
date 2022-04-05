@@ -8,7 +8,7 @@ use std::collections::{HashMap, LinkedList};
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -29,6 +29,7 @@ where
     context: Arc<RwLock<Context<V, E, M>>>,
     vertices: Mutex<HashMap<i64, Vertex<V, E, M>>>,
     sender: Sender<ChannelMessage<M>>,
+    receiver: Receiver<ChannelMessage<M>>,
     aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
@@ -43,11 +44,13 @@ where
         id: i64,
         context: Arc<RwLock<Context<V, E, M>>>,
         sender: Sender<ChannelMessage<M>>,
+        receiver: Receiver<ChannelMessage<M>>,
     ) -> Self {
         Worker {
             id,
             context,
             sender,
+            receiver,
             edges_path: None,
             vertices_path: None,
             time_cost: RefCell::new(0),
@@ -81,7 +84,7 @@ where
         }
     }
 
-    pub fn receive_message(&mut self, message: Message<M>) {
+    fn receive_message(&self, message: Message<M>) {
         if let Ok(mut vertices) = self.vertices.lock() {
             if let Some(vertex) = vertices.get_mut(&message.receiver) {
                 let value = match (
@@ -97,7 +100,7 @@ where
         }
     }
 
-    pub fn add_vertex(&mut self, id: i64) {
+    fn add_vertex(&self, id: i64) {
         match self.vertices.lock() {
             Ok(mut vertices) => {
                 vertices
@@ -117,8 +120,18 @@ where
             State::COMPUTED => self.communicate(),
             State::COMMUNICATED => self.clean(),
         }
-        *self.time_cost.borrow_mut() = now.elapsed().as_millis();
+
         self.sender.send(ChannelMessage::Hlt).unwrap();
+
+        for message in &self.receiver {
+            match message {
+                ChannelMessage::Msg(msg) => self.receive_message(msg),
+                ChannelMessage::Vtx(id) => self.add_vertex(id),
+                ChannelMessage::Hlt => break,
+            }
+        }
+
+        *self.time_cost.borrow_mut() = now.elapsed().as_millis();
     }
 
     pub fn report(&self, name: &String) -> Option<Box<dyn Send + Sync>> {
@@ -139,7 +152,11 @@ where
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
-                    Err(err) => panic!("Failed to open edges file at {}: {}", path.to_string_lossy(), err),
+                    Err(err) => panic!(
+                        "Failed to open edges file at {}: {}",
+                        path.to_string_lossy(),
+                        err
+                    ),
                 };
 
                 for line in io::BufReader::new(file).lines() {
@@ -181,7 +198,11 @@ where
             (Some(path), Some(parser)) => {
                 let file = match File::open(path) {
                     Ok(file) => file,
-                    Err(err) => panic!("Failed to open vertices file at {}: {}", path.to_string_lossy(), err),
+                    Err(err) => panic!(
+                        "Failed to open vertices file at {}: {}",
+                        path.to_string_lossy(),
+                        err
+                    ),
                 };
 
                 for line in io::BufReader::new(file).lines() {
@@ -206,6 +227,12 @@ where
     fn load(&self) {
         self.load_edges();
         self.load_vertices();
+        match self.vertices.lock() {
+            Ok(vertices) => {
+                *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
+            }
+            Err(_) => (),
+        }
     }
 
     fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
@@ -247,6 +274,7 @@ where
             Ok(mut vertices) => {
                 *self.n_active_vertices.borrow_mut() = vertices.len() as i64;
                 for vertex in vertices.values_mut() {
+                    vertex.activate();
                     (self.context.read().unwrap().compute)(vertex);
 
                     for name in self.context.read().unwrap().aggregators.keys() {
@@ -266,7 +294,8 @@ where
         for (_, mut send_queue) in send_queues.drain() {
             while let Some(message) = send_queue.pop_front() {
                 match self.sender.send(ChannelMessage::Msg(message)) {
-                    _ => (),
+                    Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
+                    Err(_) => (),
                 }
             }
         }
