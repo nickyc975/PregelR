@@ -1,7 +1,7 @@
 use super::aggregate::Aggregate;
+use super::channel::Channel;
 use super::combine::Combine;
 use super::context::Context;
-use super::message::ChannelMessage;
 use super::state::State;
 use super::vertex::Vertex;
 use super::worker::Worker;
@@ -166,11 +166,16 @@ where
                 println!("Superstep: {}", context.superstep);
                 for worker in self.workers.values() {
                     println!(
-                            "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, msg_sent: {}, msg_recv: {}, time_cost: {} ms",
-                            worker.id, worker.n_active_vertices.borrow(), worker.local_n_vertices(), worker.local_n_edges(),
-                            worker.n_msg_sent.borrow(), worker.n_msg_recv.borrow(),
-                            worker.time_cost.borrow()
-                        );
+                        "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, \
+                            msg_sent: {}, msg_recv: {}, time_cost: {} ms",
+                        worker.id,
+                        worker.n_active_vertices.borrow(),
+                        worker.local_n_vertices(),
+                        worker.local_n_edges(),
+                        worker.n_msg_sent.borrow(),
+                        worker.n_msg_recv.borrow(),
+                        worker.time_cost.borrow()
+                    );
 
                     for (name, aggregator) in context.aggregators.iter() {
                         if let Some(new_val) = worker.report(&name) {
@@ -187,32 +192,25 @@ where
         }
     }
 
-    fn update_state(&mut self) {
-        let mut context = self.context.write().unwrap();
-        match context.state {
-            State::INITIALIZED => context.state = State::LOADED,
-            State::LOADED => context.state = State::CLEANED,
-            State::CLEANED => context.state = State::COMPUTED,
-            State::COMPUTED => {
-                context.state = State::COMMUNICATED;
-                context.superstep += 1;
-                self.aggregate(&context);
+    fn create_workers(&mut self) {
+        let mut senderss = vec![Vec::new(); self.nworkers as usize];
+        let mut receivers = Vec::new();
+        for _ in 0..self.nworkers {
+            let (sender, receiver) = mpsc::channel();
+            for senders in &mut senderss {
+                senders.push(sender.clone());
             }
-            State::COMMUNICATED => context.state = State::CLEANED,
+            receivers.push(receiver);
         }
-    }
 
-    pub fn run(&mut self) {
-        let mut m_senders = Vec::new();
-        let (w_sender, m_receiver) = mpsc::channel();
-
-        for i in 0..self.nworkers {
-            let (m_sender, w_receiver) = mpsc::channel();
+        // Vec::pop() removes item from the end of the vector, which means we get receiver and senders
+        // at the order (self.nworkers-1)..0. Thus, we have to create workers in such order or we'll
+        // assign wrong receiver and senders to workers.
+        for i in (0..self.nworkers).rev() {
             let mut worker = Worker::new(
                 i as i64,
+                Channel::new(receivers.pop().unwrap(), senderss.pop().unwrap()),
                 Arc::clone(&self.context),
-                w_sender.clone(),
-                w_receiver,
             );
 
             worker.edges_path = match self.edges_path.as_ref() {
@@ -226,48 +224,38 @@ where
             };
 
             self.workers.insert(i as i64, worker);
-            m_senders.push(m_sender);
         }
+    }
 
-        drop(w_sender);
+    fn update_state(&mut self) {
+        let mut context = self.context.write().unwrap();
+        match context.state {
+            State::INITIALIZED => context.state = State::LOADED,
+            State::LOADED => context.state = State::CLEANED,
+            State::CLEANED => {
+                context.state = State::COMPUTED;
+                context.superstep += 1;
+                self.aggregate(&context);
+            }
+            State::COMPUTED => context.state = State::CLEANED,
+        }
+    }
+
+    pub fn run(&mut self) {
+        self.create_workers();
 
         let now = Instant::now();
 
         self.n_active_workers = self.nworkers;
         while self.n_active_workers > 0 {
-            self.n_active_workers = self.nworkers;
-
             let mut handles = Vec::new();
-            let mut n_running_workers = self.nworkers;
+            self.n_active_workers = self.nworkers;
 
             for (_, worker) in self.workers.drain() {
                 handles.push(spawn(move || {
                     worker.run();
                     worker
                 }));
-            }
-
-            for message in &m_receiver {
-                match message {
-                    ChannelMessage::Msg(msg) => {
-                        let index = (msg.receiver % self.nworkers) as usize;
-                        m_senders[index].send(ChannelMessage::Msg(msg)).unwrap();
-                    }
-                    ChannelMessage::Vtx(id) => {
-                        let index = (id % self.nworkers) as usize;
-                        m_senders[index].send(ChannelMessage::Vtx(id)).unwrap();
-                    }
-                    ChannelMessage::Hlt => {
-                        n_running_workers -= 1;
-                        if n_running_workers <= 0 {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            for m_sender in &m_senders {
-                m_sender.send(ChannelMessage::Hlt).unwrap();
             }
 
             for handle in handles {

@@ -13,9 +13,3 @@ impl<M> Message<M> {
         }
     }
 }
-
-pub enum ChannelMessage<M> {
-    Msg(Message<M>),
-    Vtx(i64),
-    Hlt,
-}

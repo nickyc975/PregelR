@@ -5,6 +5,7 @@ pub mod pregel {
     pub mod master;
     pub mod vertex;
 
+    mod channel;
     mod message;
     mod state;
     mod worker;

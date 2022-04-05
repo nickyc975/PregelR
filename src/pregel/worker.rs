@@ -1,5 +1,6 @@
+use super::channel::{Channel, ChannelMessage};
 use super::context::Context;
-use super::message::{ChannelMessage, Message};
+use super::message::Message;
 use super::state::State;
 use super::vertex::Vertex;
 
@@ -8,7 +9,6 @@ use std::collections::{HashMap, LinkedList};
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -26,10 +26,10 @@ where
     pub n_active_vertices: RefCell<i64>,
     pub edges_path: Option<PathBuf>,
     pub vertices_path: Option<PathBuf>,
+
+    channel: Channel<M>,
     context: Arc<RwLock<Context<V, E, M>>>,
     vertices: Mutex<HashMap<i64, Vertex<V, E, M>>>,
-    sender: Sender<ChannelMessage<M>>,
-    receiver: Receiver<ChannelMessage<M>>,
     aggregated_values: RefCell<HashMap<String, Box<dyn Send + Sync>>>,
     send_queues: RefCell<HashMap<i64, LinkedList<Message<M>>>>,
 }
@@ -40,17 +40,11 @@ where
     E: 'static + Send,
     M: 'static + Send + Clone,
 {
-    pub fn new(
-        id: i64,
-        context: Arc<RwLock<Context<V, E, M>>>,
-        sender: Sender<ChannelMessage<M>>,
-        receiver: Receiver<ChannelMessage<M>>,
-    ) -> Self {
+    pub fn new(id: i64, channel: Channel<M>, context: Arc<RwLock<Context<V, E, M>>>) -> Self {
         Worker {
             id,
+            channel,
             context,
-            sender,
-            receiver,
             edges_path: None,
             vertices_path: None,
             time_cost: RefCell::new(0),
@@ -118,17 +112,18 @@ where
             State::INITIALIZED => self.load(),
             State::LOADED => self.clean(),
             State::CLEANED => self.compute(),
-            State::COMPUTED => self.communicate(),
-            State::COMMUNICATED => self.clean(),
+            State::COMPUTED => self.clean(),
         }
 
-        self.sender.send(ChannelMessage::Hlt).unwrap();
+        self.channel.send(ChannelMessage::Hlt).unwrap();
 
-        for message in &self.receiver {
+        for message in &self.channel {
             match message {
                 ChannelMessage::Msg(msg) => self.receive_message(msg),
                 ChannelMessage::Vtx(id) => self.add_vertex(id),
-                ChannelMessage::Hlt => break,
+                ChannelMessage::Hlt => {
+                    unreachable!("Channel should never return ChannelMessage::Hlt!")
+                }
             }
         }
 
@@ -178,9 +173,7 @@ where
                                     );
                                 }
 
-                                match self.sender.send(ChannelMessage::Vtx(target)) {
-                                    _ => (),
-                                }
+                                self.channel.send(ChannelMessage::Vtx(target)).unwrap();
                             }
                             Err(_) => (),
                         }
@@ -288,20 +281,20 @@ where
 
                     *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
                 }
-            }
-            Err(_) => (),
-        }
-    }
 
-    fn communicate(&self) {
-        let mut send_queues = self.send_queues.borrow_mut();
-        for (_, mut send_queue) in send_queues.drain() {
-            while let Some(message) = send_queue.pop_front() {
-                match self.sender.send(ChannelMessage::Msg(message)) {
-                    Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
-                    Err(_) => (),
+                let mut send_queues = self.send_queues.borrow_mut();
+                for (_, mut send_queue) in send_queues.drain() {
+                    while let Some(message) = send_queue.pop_front() {
+                        match self.channel.send(ChannelMessage::Msg(message)) {
+                            Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
+                            Err(e) => {
+                                eprintln!("Message sent failed: {}", e);
+                            }
+                        }
+                    }
                 }
             }
+            Err(_) => (),
         }
     }
 }
