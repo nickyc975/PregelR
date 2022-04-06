@@ -1,8 +1,9 @@
 use super::vertex::Vertex;
 
 use std::any::Any;
+use std::sync::Arc;
 
-pub type AggVal = Box<dyn Any + Send + Sync>;
+pub type AggVal = Arc<dyn Any + Send + Sync>;
 
 pub trait Aggregate<V, E, M>: Send + Sync
 where

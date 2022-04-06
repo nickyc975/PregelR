@@ -5,7 +5,7 @@ use super::vertex::Vertex;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 pub struct Context<V, E, M>
 where
@@ -13,21 +13,21 @@ where
     E: 'static + Send,
     M: 'static + Send + Clone,
 {
-    pub state: State,
-    pub superstep: i64,
-    pub num_edges: i64,
-    pub num_vertices: i64,
+    pub(crate) state: State,
+    pub(crate) superstep: i64,
+    pub(crate) num_edges: i64,
+    pub(crate) num_vertices: i64,
 
-    pub work_path: PathBuf,
+    pub(crate) work_path: PathBuf,
 
-    pub edge_parser: Option<Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>>,
-    pub vertex_parser: Option<Box<dyn Fn(&String) -> (i64, V) + Send + Sync>>,
+    pub(crate) edge_parser: Option<Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>>,
+    pub(crate) vertex_parser: Option<Box<dyn Fn(&String) -> (i64, V) + Send + Sync>>,
 
-    pub compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
+    pub(crate) compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
 
-    pub combiner: Option<Box<dyn Combine<M>>>,
-    pub aggregators: HashMap<String, Box<dyn Aggregate<V, E, M>>>,
-    pub aggregated_values: RwLock<HashMap<String, AggVal>>,
+    pub(crate) combiner: Option<Box<dyn Combine<M>>>,
+    pub(crate) aggregators: HashMap<String, Box<dyn Aggregate<V, E, M>>>,
+    pub(crate) aggregated_values: RwLock<HashMap<String, AggVal>>,
 }
 
 impl<V, E, M> Context<V, E, M>
@@ -52,6 +52,35 @@ where
             combiner: None,
             aggregators: HashMap::new(),
             aggregated_values: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    pub fn superstep(&self) -> i64 {
+        self.superstep
+    }
+
+    pub fn num_edges(&self) -> i64 {
+        self.num_edges
+    }
+
+    pub fn num_vertices(&self) -> i64 {
+        self.num_vertices
+    }
+
+    pub fn get_aggregated_value<T: 'static + Send + Sync>(&self, name: &String) -> Option<Arc<T>> {
+        match self.aggregated_values.read() {
+            Ok(aggregated_values) => match aggregated_values.get(name) {
+                Some(value_box) => match value_box.clone().downcast::<T>() {
+                    Ok(value) => Some(value),
+                    Err(_) => None,
+                },
+                None => None,
+            },
+            Err(_) => None,
         }
     }
 }

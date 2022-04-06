@@ -237,6 +237,15 @@ where
             State::CLEANED => {
                 context.state = State::COMPUTED;
                 context.superstep += 1;
+
+                (context.num_edges, context.num_vertices) = self
+                    .workers
+                    .values()
+                    .map(|w| (w.local_n_edges(), w.local_n_vertices()))
+                    .fold((0, 0), |(init_n_e, init_n_v), (n_e, n_v)| {
+                        (init_n_e + n_e, init_n_v + n_v)
+                    });
+
                 self.aggregate(&context);
             }
             State::COMPUTED => context.state = State::CLEANED,
@@ -276,21 +285,5 @@ where
         }
 
         println!("Total time cost: {} ms", now.elapsed().as_millis());
-    }
-
-    pub fn take_aggregated_value<T: 'static>(&self, name: &String) -> Option<T> {
-        match self.context.write() {
-            Ok(context) => match context.aggregated_values.write() {
-                Ok(mut aggregated_values) => match aggregated_values.remove(name) {
-                    Some(value_box) => match value_box.downcast::<T>() {
-                        Ok(value) => Some(*value),
-                        Err(_) => None,
-                    },
-                    None => None,
-                },
-                Err(_) => None,
-            },
-            Err(_) => None,
-        }
     }
 }

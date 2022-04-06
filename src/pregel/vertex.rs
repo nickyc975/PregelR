@@ -19,7 +19,7 @@ where
     outer_edges: HashMap<i64, (i64, i64, E)>,
     odd_recv_queue: LinkedList<M>,
     even_recv_queue: LinkedList<M>,
-    pub send_queue: RefCell<LinkedList<Message<M>>>,
+    pub(crate) send_queue: RefCell<LinkedList<Message<M>>>,
 }
 
 impl<V, E, M> Vertex<V, E, M>

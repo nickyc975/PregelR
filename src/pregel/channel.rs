@@ -27,10 +27,7 @@ where
         receiver: mpsc::Receiver<ChannelMessage<M>>,
         senders: Vec<mpsc::Sender<ChannelMessage<M>>>,
     ) -> Self {
-        Channel {
-            receiver,
-            senders,
-        }
+        Channel { receiver, senders }
     }
 
     pub fn send(&self, chl_msg: ChannelMessage<M>) -> Result<(), SendError<ChannelMessage<M>>> {
