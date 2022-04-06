@@ -94,21 +94,14 @@ where
         self
     }
 
-    fn cal_index_for_edge(&self, line: &String) -> usize {
-        ((self.context.read().unwrap().edge_parser.as_ref().unwrap())(line).0 % self.nworkers)
-            as usize
-    }
-
-    fn cal_index_for_vertex(&self, line: &String) -> usize {
-        ((self.context.read().unwrap().vertex_parser.as_ref().unwrap())(line).0 % self.nworkers)
-            as usize
-    }
-
     fn partition(
         &self,
         input_dir: &Path,
         output_dir: &Path,
-        partition_edges: bool,
+        // The cal_index function cannot take string reference as the parameter
+        // because of lifetime problems, so we must transfer the ownership in
+        // and out.
+        cal_index: &dyn Fn(String) -> (usize, String),
     ) -> io::Result<()> {
         let reader = io::BufReader::new(File::open(input_dir)?);
         let mut writers: Vec<io::BufWriter<_>> = (0..self.nworkers)
@@ -121,11 +114,7 @@ where
 
         for line in reader.lines() {
             if let Ok(line) = line {
-                let index = if partition_edges {
-                    self.cal_index_for_edge(&line)
-                } else {
-                    self.cal_index_for_vertex(&line)
-                };
+                let (index, line) = cal_index(line);
                 writers[index].write_all(line.as_bytes())?;
                 writers[index].write_all("\n".as_bytes())?;
             }
@@ -136,12 +125,13 @@ where
 
     pub fn load_edges(&mut self, path: &Path) {
         let context = self.context.read().unwrap();
-        let edges_path = Path::new(&context.work_path).join("graph").join("parts");
-
         match context.edge_parser.as_ref() {
-            Some(_) => {
+            Some(parser) => {
+                let cal_index = |s| ((parser(&s).0 % self.nworkers) as usize, s);
+                let edges_path = Path::new(&context.work_path).join("graph").join("parts");
+
                 fs::create_dir_all(&edges_path).unwrap();
-                self.partition(path, &edges_path, true).unwrap();
+                self.partition(path, &edges_path, &cal_index).unwrap();
                 self.edges_path = Some(edges_path);
             }
             None => (),
@@ -150,12 +140,13 @@ where
 
     pub fn load_vertices(&mut self, path: &Path) {
         let context = self.context.read().unwrap();
-        let vertices_path = Path::new(&context.work_path).join("vertices").join("parts");
-
         match context.vertex_parser.as_ref() {
-            Some(_) => {
+            Some(parser) => {
+                let cal_index = |s| ((parser(&s).0 % self.nworkers) as usize, s);
+                let vertices_path = Path::new(&context.work_path).join("vertices").join("parts");
+
                 fs::create_dir_all(&vertices_path).unwrap();
-                self.partition(path, &vertices_path, false).unwrap();
+                self.partition(path, &vertices_path, &cal_index).unwrap();
                 self.vertices_path = Some(vertices_path);
             }
             None => (),

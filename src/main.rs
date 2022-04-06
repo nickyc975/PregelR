@@ -23,9 +23,9 @@ struct SSSPAggregator;
 
 impl Aggregate<f64, f64, f64> for SSSPAggregator {
     fn report(&self, v: &Vertex<f64, f64, f64>) -> AggVal {
-        let val = Mutex::new(LinkedList::new());
-        val.lock().unwrap().push_back((v.id, v.value));
-        Arc::new(val)
+        let mut val = LinkedList::new();
+        val.push_back((v.id, v.value));
+        Arc::new(Mutex::new(val))
     }
 
     fn aggregate(&self, a: AggVal, b: AggVal) -> AggVal {
@@ -90,10 +90,13 @@ fn main() {
 
     let mut master = Master::new(8, compute, Path::new("data/sssp"));
 
-    master.set_edge_parser(edge_parser);
-    master.set_vertex_parser(vertex_parser);
-    master.set_combiner(Box::new(SSSPCombiner));
-    master.add_aggregator("path_length".to_string(), Box::new(SSSPAggregator));
+    master
+        .set_edge_parser(edge_parser)
+        .set_vertex_parser(vertex_parser)
+        .set_combiner(Box::new(SSSPCombiner));
+
+    let path_lengths_key = "path_length".to_string();
+    master.add_aggregator(path_lengths_key.clone(), Box::new(SSSPAggregator));
 
     master.load_edges(Path::new("data/web-Google.txt"));
     master.run();
@@ -102,7 +105,7 @@ fn main() {
         .context
         .read()
         .unwrap()
-        .get_aggregated_value::<Mutex<LinkedList<(i64, Option<f64>)>>>(&"path_length".to_string());
+        .get_aggregated_value::<Mutex<LinkedList<(i64, Option<f64>)>>>(&path_lengths_key);
 
     if let Some(path_lengths) = path_lengths_op {
         let mut writer = io::BufWriter::new(File::create("data/sssp/output.txt").unwrap());
