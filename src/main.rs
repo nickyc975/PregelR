@@ -1,5 +1,6 @@
 use pregel::pregel::aggregate::{AggVal, Aggregate};
 use pregel::pregel::combine::Combine;
+use pregel::pregel::context::Context;
 use pregel::pregel::master::Master;
 use pregel::pregel::vertex::Vertex;
 
@@ -7,6 +8,7 @@ use std::collections::LinkedList;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::RwLockReadGuard;
 use std::sync::{Arc, Mutex};
 
 struct SSSPCombiner;
@@ -44,31 +46,33 @@ impl Aggregate<f64, f64, f64> for SSSPAggregator {
 }
 
 fn main() {
-    let compute = Box::new(|vertex: &mut Vertex<f64, f64, f64>| {
-        let mut min = if vertex.id == 0 { 0_f64 } else { f64::INFINITY };
+    let compute = Box::new(
+        |vertex: &mut Vertex<f64, f64, f64>, context: &RwLockReadGuard<Context<f64, f64, f64>>| {
+            let mut min = if vertex.id == 0 { 0_f64 } else { f64::INFINITY };
 
-        if vertex.context.read().unwrap().superstep() == 0 {
-            vertex.value = Some(min);
-        } else {
-            let orig = vertex.value.unwrap();
+            if context.superstep() == 0 {
+                vertex.value = Some(min);
+            } else {
+                let orig = vertex.value.unwrap();
 
-            while vertex.has_messages() {
-                min = f64::min(min, vertex.read_message().unwrap());
-                if min < vertex.value.unwrap() {
-                    vertex.value = Some(min);
+                while vertex.has_messages(context) {
+                    min = f64::min(min, vertex.read_message(context).unwrap());
+                    if min < vertex.value.unwrap() {
+                        vertex.value = Some(min);
+                    }
+                }
+
+                if min >= orig {
+                    vertex.deactivate();
+                    return;
                 }
             }
 
-            if min >= orig {
-                vertex.deactivate();
-                return;
+            for (_, target, edge) in vertex.get_outer_edges().values() {
+                vertex.send_message_to(*target, edge + min);
             }
-        }
-
-        for (_, target, edge) in vertex.get_outer_edges().values() {
-            vertex.send_message_to(*target, edge + min);
-        }
-    });
+        },
+    );
 
     let edge_parser = Box::new(|s: &String| {
         let parts: Vec<_> = s.split('\t').collect();

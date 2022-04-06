@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, RwLock, RwLockWriteGuard};
+use std::sync::{mpsc, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::spawn;
 use std::time::Instant;
 
@@ -36,7 +36,9 @@ where
 {
     pub fn new(
         nworkers: i64,
-        compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
+        compute: Box<
+            dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync,
+        >,
         work_path: &Path,
     ) -> Self {
         if work_path.exists() {

@@ -5,7 +5,7 @@ use super::vertex::Vertex;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 pub struct Context<V, E, M>
 where
@@ -23,7 +23,8 @@ where
     pub(crate) edge_parser: Option<Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>>,
     pub(crate) vertex_parser: Option<Box<dyn Fn(&String) -> (i64, V) + Send + Sync>>,
 
-    pub(crate) compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
+    pub(crate) compute:
+        Box<dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync>,
 
     pub(crate) combiner: Option<Box<dyn Combine<M>>>,
     pub(crate) aggregators: HashMap<String, Box<dyn Aggregate<V, E, M>>>,
@@ -37,7 +38,9 @@ where
     M: 'static + Send + Clone,
 {
     pub fn new(
-        compute: Box<dyn Fn(&mut Vertex<V, E, M>) + Send + Sync>,
+        compute: Box<
+            dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync,
+        >,
         work_path: PathBuf,
     ) -> Self {
         Context {

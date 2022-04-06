@@ -10,7 +10,7 @@ use std::collections::{HashMap, LinkedList};
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Instant;
 
 pub struct Worker<V, E, M>
@@ -69,16 +69,16 @@ where
         sum
     }
 
-    fn receive_message(&self, message: Message<M>) {
+    fn receive_message(&self, context: &RwLockReadGuard<Context<V, E, M>>, message: Message<M>) {
         if let Some(vertex) = self.vertices.borrow_mut().get_mut(&message.receiver) {
             let value = match (
-                self.context.read().unwrap().combiner.as_ref(),
-                vertex.read_next_step_message(),
+                context.combiner.as_ref(),
+                vertex.read_next_step_message(context),
             ) {
                 (Some(combiner), Some(init)) => combiner.combine(init, message.value),
                 _ => message.value,
             };
-            vertex.receive_message(value);
+            vertex.receive_message(context, value);
             *self.n_msg_recv.borrow_mut() += 1;
         }
     }
@@ -87,16 +87,17 @@ where
         self.vertices
             .borrow_mut()
             .entry(id)
-            .or_insert(Vertex::new(id, Arc::clone(&self.context)));
+            .or_insert(Vertex::new(id));
     }
 
     pub fn run(&self) {
         let now = Instant::now();
+        let context = self.context.read().unwrap();
 
-        match self.context.read().unwrap().state {
-            State::INITIALIZED => self.load(),
+        match context.state {
+            State::INITIALIZED => self.load(&context),
             State::LOADED => self.clean(),
-            State::CLEANED => self.compute(),
+            State::CLEANED => self.compute(&context),
             State::COMPUTED => self.clean(),
         }
 
@@ -104,7 +105,7 @@ where
 
         for message in &self.channel {
             match message {
-                ChannelMessage::Msg(msg) => self.receive_message(msg),
+                ChannelMessage::Msg(msg) => self.receive_message(&context, msg),
                 ChannelMessage::Vtx(id) => self.add_vertex(id),
                 ChannelMessage::Hlt => {
                     unreachable!("Channel should never return ChannelMessage::Hlt!")
@@ -144,9 +145,7 @@ where
             if let Ok(line) = line {
                 let (source, target, edge) = parser(&line);
 
-                let vertex = vertices
-                    .entry(source)
-                    .or_insert(Vertex::new(source, Arc::clone(&self.context)));
+                let vertex = vertices.entry(source).or_insert(Vertex::new(source));
 
                 if !vertex.has_outer_edge_to(target) {
                     vertex.add_outer_edge((source, target, edge));
@@ -173,27 +172,19 @@ where
         for line in io::BufReader::new(file).lines() {
             if let Ok(line) = line {
                 let (id, value) = parser(&line);
-                let vertex = vertices
-                    .entry(id)
-                    .or_insert(Vertex::new(id, Arc::clone(&self.context)));
+                let vertex = vertices.entry(id).or_insert(Vertex::new(id));
                 vertex.value = Some(value);
             }
         }
     }
 
-    fn load(&self) {
-        match (
-            self.edges_path.as_ref(),
-            self.context.read().unwrap().edge_parser.as_ref(),
-        ) {
+    fn load(&self, context: &RwLockReadGuard<Context<V, E, M>>) {
+        match (self.edges_path.as_ref(), context.edge_parser.as_ref()) {
             (Some(path), Some(parser)) => self.load_edges(path, parser),
             _ => (),
         }
 
-        match (
-            self.vertices_path.as_ref(),
-            self.context.read().unwrap().vertex_parser.as_ref(),
-        ) {
+        match (self.vertices_path.as_ref(), context.vertex_parser.as_ref()) {
             (Some(path), Some(parser)) => self.load_vertices(path, parser),
             _ => (),
         }
@@ -201,8 +192,13 @@ where
         *self.n_active_vertices.borrow_mut() = self.vertices.borrow().len() as i64;
     }
 
-    fn aggregate(&self, name: &String, vertex: &Vertex<V, E, M>) {
-        match self.context.read().unwrap().aggregators.get(name) {
+    fn aggregate(
+        &self,
+        context: &RwLockReadGuard<Context<V, E, M>>,
+        name: &String,
+        vertex: &Vertex<V, E, M>,
+    ) {
+        match context.aggregators.get(name) {
             Some(aggregator) => {
                 let new_val = aggregator.report(vertex);
                 let mut values_mut = self.aggregated_values.borrow_mut();
@@ -216,17 +212,18 @@ where
         };
     }
 
-    fn send_messages_of(&self, vertex: &Vertex<V, E, M>) {
+    fn send_messages_of(
+        &self,
+        context: &RwLockReadGuard<Context<V, E, M>>,
+        vertex: &Vertex<V, E, M>,
+    ) {
         let mut send_queue = vertex.send_queue.borrow_mut();
         while let Some(mut message) = send_queue.pop_front() {
             let receiver = message.receiver;
             let mut queues = self.send_queues.borrow_mut();
             let queue = queues.entry(receiver).or_insert(LinkedList::new());
 
-            message.value = match (
-                self.context.read().unwrap().combiner.as_ref(),
-                queue.pop_front(),
-            ) {
+            message.value = match (context.combiner.as_ref(), queue.pop_front()) {
                 (Some(combine), Some(initial)) => combine.combine(message.value, initial.value),
                 _ => message.value,
             };
@@ -235,21 +232,22 @@ where
         }
     }
 
-    fn compute(&self) {
-        *self.n_active_vertices.borrow_mut() = self.vertices.borrow().len() as i64;
+    fn compute(&self, context: &RwLockReadGuard<Context<V, E, M>>) {
+        let mut n_active_vertices = self.n_active_vertices.borrow_mut();
+
+        *n_active_vertices = self.vertices.borrow().len() as i64;
         for vertex in self.vertices.borrow_mut().values_mut() {
             vertex.activate();
-            let context = self.context.read().unwrap();
 
-            (context.compute)(vertex);
+            (context.compute)(vertex, context);
 
             for name in context.aggregators.keys() {
-                self.aggregate(name, vertex);
+                self.aggregate(context, name, vertex);
             }
 
-            self.send_messages_of(vertex);
+            self.send_messages_of(context, vertex);
 
-            *self.n_active_vertices.borrow_mut() -= if vertex.active() { 0 } else { 1 };
+            *n_active_vertices -= if vertex.active() { 0 } else { 1 };
         }
 
         let mut send_queues = self.send_queues.borrow_mut();
