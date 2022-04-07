@@ -12,7 +12,7 @@ where
     E: 'static + Send,
     M: 'static + Send + Clone,
 {
-    pub id: i64,
+    id: i64,
     pub value: Option<V>,
     active: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
@@ -37,6 +37,10 @@ where
             even_recv_queue: LinkedList::new(),
             send_queue: RefCell::new(LinkedList::new()),
         }
+    }
+
+    pub fn id(&self) -> i64 {
+        self.id
     }
 
     pub fn active(&self) -> bool {

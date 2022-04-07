@@ -24,7 +24,7 @@ struct SSSPAggregator;
 impl Aggregate<f64, f64, f64> for SSSPAggregator {
     fn report(&self, v: &Vertex<f64, f64, f64>) -> AggVal {
         let mut val = LinkedList::new();
-        val.push_back((v.id, v.value));
+        val.push_back((v.id(), v.value));
         Arc::new(Mutex::new(val))
     }
 
@@ -48,7 +48,7 @@ impl Aggregate<f64, f64, f64> for SSSPAggregator {
 fn main() {
     let compute = Box::new(
         |vertex: &mut Vertex<f64, f64, f64>, context: &RwLockReadGuard<Context<f64, f64, f64>>| {
-            let mut min = if vertex.id == 0 { 0_f64 } else { f64::INFINITY };
+            let mut min = if vertex.id() == 0 { 0_f64 } else { f64::INFINITY };
 
             if context.superstep() == 0 {
                 vertex.value = Some(min);
