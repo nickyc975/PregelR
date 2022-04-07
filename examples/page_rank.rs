@@ -1,8 +1,8 @@
-use crate::pregel::aggregate::{AggVal, Aggregate};
-use crate::pregel::combine::Combine;
-use crate::pregel::context::Context;
-use crate::pregel::master::Master;
-use crate::pregel::vertex::Vertex;
+use pregel::Combine;
+use pregel::Context;
+use pregel::Master;
+use pregel::Vertex;
+use pregel::{AggVal, Aggregate};
 
 use std::collections::LinkedList;
 use std::fs::File;
@@ -147,4 +147,12 @@ pub fn page_rank(work_path: &str, edges_path: &str, output_path: &str) {
         }
         writer.flush().unwrap();
     }
+}
+
+fn main() {
+    page_rank(
+        "data/page_rank",
+        "data/web-Google.txt",
+        "data/page_rank/output.txt",
+    );
 }

@@ -1,8 +1,8 @@
-use crate::pregel::aggregate::{AggVal, Aggregate};
-use crate::pregel::combine::Combine;
-use crate::pregel::context::Context;
-use crate::pregel::master::Master;
-use crate::pregel::vertex::Vertex;
+use pregel::Combine;
+use pregel::Context;
+use pregel::Master;
+use pregel::Vertex;
+use pregel::{AggVal, Aggregate};
 
 use std::collections::LinkedList;
 use std::fs::File;
@@ -118,4 +118,8 @@ pub fn single_source_shortest_path(work_path: &str, edges_path: &str, output_pat
         }
         writer.flush().unwrap();
     }
+}
+
+fn main() {
+    single_source_shortest_path("data/sssp", "data/web-Google.txt", "data/sssp/output.txt");
 }

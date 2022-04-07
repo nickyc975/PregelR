@@ -1,5 +1,5 @@
-use super::context::Context;
 use super::message::Message;
+use super::Context;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

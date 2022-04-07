@@ -1,4 +1,4 @@
-use super::vertex::Vertex;
+use super::Vertex;
 
 use std::any::Any;
 use std::sync::Arc;

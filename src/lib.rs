@@ -1,17 +1,19 @@
-pub mod pregel {
-    pub mod aggregate;
-    pub mod combine;
-    pub mod context;
-    pub mod master;
-    pub mod vertex;
+mod channel;
+mod message;
+mod state;
+mod worker;
 
-    mod channel;
-    mod message;
-    mod state;
-    mod worker;
-}
+mod aggregate;
+pub use aggregate::*;
 
-pub mod examples {
-    pub mod page_rank;
-    pub mod sssp;
-}
+mod combine;
+pub use combine::*;
+
+mod context;
+pub use context::*;
+
+mod master;
+pub use master::*;
+
+mod vertex;
+pub use vertex::*;

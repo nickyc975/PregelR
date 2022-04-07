@@ -1,7 +1,7 @@
-use super::aggregate::{AggVal, Aggregate};
-use super::combine::Combine;
 use super::state::State;
-use super::vertex::Vertex;
+use super::Combine;
+use super::Vertex;
+use super::{AggVal, Aggregate};
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,10 +1,10 @@
-use super::aggregate::Aggregate;
 use super::channel::Channel;
-use super::combine::Combine;
-use super::context::Context;
 use super::state::State;
-use super::vertex::Vertex;
 use super::worker::Worker;
+use super::Aggregate;
+use super::Combine;
+use super::Context;
+use super::Vertex;
 
 use std::collections::HashMap;
 use std::fs::{self, File};

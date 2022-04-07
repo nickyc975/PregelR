@@ -1,9 +1,9 @@
-use super::aggregate::AggVal;
 use super::channel::{Channel, ChannelMessage};
-use super::context::Context;
 use super::message::Message;
 use super::state::State;
-use super::vertex::Vertex;
+use super::AggVal;
+use super::Context;
+use super::Vertex;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, LinkedList};
