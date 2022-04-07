@@ -62,7 +62,7 @@ where
 
     pub fn set_edge_parser(
         &mut self,
-        edge_parser: Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>,
+        edge_parser: Box<dyn Fn(&String) -> Option<(i64, i64, E)> + Send + Sync>,
     ) -> &mut Self {
         self.context.write().unwrap().edge_parser = Some(edge_parser);
         self
@@ -70,7 +70,7 @@ where
 
     pub fn set_vertex_parser(
         &mut self,
-        vertex_parser: Box<dyn Fn(&String) -> (i64, V) + Send + Sync>,
+        vertex_parser: Box<dyn Fn(&String) -> Option<(i64, V)> + Send + Sync>,
     ) -> &mut Self {
         self.context.write().unwrap().vertex_parser = Some(vertex_parser);
         self
@@ -101,7 +101,7 @@ where
         // The cal_index function cannot take string reference as the parameter
         // because of lifetime problems, so we must transfer the ownership in
         // and out.
-        cal_index: &dyn Fn(String) -> (usize, String),
+        cal_index: &dyn Fn(String) -> Option<(usize, String)>,
     ) -> io::Result<()> {
         let reader = io::BufReader::new(File::open(input_dir)?);
         let mut writers: Vec<io::BufWriter<_>> = (0..self.nworkers)
@@ -114,9 +114,10 @@ where
 
         for line in reader.lines() {
             if let Ok(line) = line {
-                let (index, line) = cal_index(line);
-                writers[index].write_all(line.as_bytes())?;
-                writers[index].write_all("\n".as_bytes())?;
+                if let Some((index, line)) = cal_index(line) {
+                    writers[index].write_all(line.as_bytes())?;
+                    writers[index].write_all("\n".as_bytes())?;
+                }
             }
         }
 
@@ -127,7 +128,11 @@ where
         let context = self.context.read().unwrap();
         match context.edge_parser.as_ref() {
             Some(parser) => {
-                let cal_index = |s| ((parser(&s).0 % self.nworkers) as usize, s);
+                let cal_index = |s| match parser(&s) {
+                    Some(edge) => Some(((edge.0 % self.nworkers) as usize, s)),
+                    None => None,
+                };
+
                 let edges_path = Path::new(&context.work_path).join("graph").join("parts");
 
                 fs::create_dir_all(&edges_path).unwrap();
@@ -142,7 +147,11 @@ where
         let context = self.context.read().unwrap();
         match context.vertex_parser.as_ref() {
             Some(parser) => {
-                let cal_index = |s| ((parser(&s).0 % self.nworkers) as usize, s);
+                let cal_index = |s| match parser(&s) {
+                    Some(vertex) => Some(((vertex.0 % self.nworkers) as usize, s)),
+                    None => None,
+                };
+
                 let vertices_path = Path::new(&context.work_path).join("vertices").join("parts");
 
                 fs::create_dir_all(&vertices_path).unwrap();

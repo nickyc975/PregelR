@@ -94,14 +94,28 @@ fn compute(vertex: &mut Vertex<f64, (), f64>, context: &RwLockReadGuard<Context<
     }
 }
 
-fn edge_parser(s: &String) -> (i64, i64, ()) {
+fn edge_parser(s: &String) -> Option<(i64, i64, ())> {
     let parts: Vec<_> = s.split('\t').collect();
-    (parts[0].parse().unwrap(), parts[1].parse().unwrap(), ())
+    if parts.len() != 2 {
+        return None;
+    }
+
+    match (parts[0].parse(), parts[1].parse()) {
+        (Ok(s), Ok(t)) => Some((s, t, ())),
+        _ => None,
+    }
 }
 
-fn vertex_parser(s: &String) -> (i64, f64) {
+fn vertex_parser(s: &String) -> Option<(i64, f64)> {
     let parts: Vec<_> = s.split('\t').collect();
-    (parts[0].parse().unwrap(), 0.0_f64)
+    if parts.len() != 1 {
+        return None;
+    }
+
+    match parts[0].parse() {
+        Ok(id) => Some((id, 0.0_f64)),
+        _ => None,
+    }
 }
 
 pub fn page_rank(work_path: &str, edges_path: &str, output_path: &str) {

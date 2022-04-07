@@ -20,8 +20,8 @@ where
 
     pub(crate) work_path: PathBuf,
 
-    pub(crate) edge_parser: Option<Box<dyn Fn(&String) -> (i64, i64, E) + Send + Sync>>,
-    pub(crate) vertex_parser: Option<Box<dyn Fn(&String) -> (i64, V) + Send + Sync>>,
+    pub(crate) edge_parser: Option<Box<dyn Fn(&String) -> Option<(i64, i64, E)> + Send + Sync>>,
+    pub(crate) vertex_parser: Option<Box<dyn Fn(&String) -> Option<(i64, V)> + Send + Sync>>,
 
     pub(crate) compute:
         Box<dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync>,

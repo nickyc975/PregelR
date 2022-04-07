@@ -72,7 +72,7 @@ where
     fn load_edges(
         &self,
         path: &PathBuf,
-        parser: &(dyn Fn(&String) -> (i64, i64, E) + Send + Sync),
+        parser: &(dyn Fn(&String) -> Option<(i64, i64, E)> + Send + Sync),
     ) {
         let file = match File::open(path) {
             Ok(file) => file,
@@ -86,22 +86,26 @@ where
         let mut vertices = self.vertices.borrow_mut();
         for line in io::BufReader::new(file).lines() {
             if let Ok(line) = line {
-                let (source, target, edge) = parser(&line);
+                if let Some((source, target, edge)) = parser(&line) {
+                    let vertex = vertices.entry(source).or_insert(Vertex::new(source));
 
-                let vertex = vertices.entry(source).or_insert(Vertex::new(source));
+                    if !vertex.has_outer_edge_to(target) {
+                        vertex.add_outer_edge((source, target, edge));
+                    } else {
+                        eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
+                    }
 
-                if !vertex.has_outer_edge_to(target) {
-                    vertex.add_outer_edge((source, target, edge));
-                } else {
-                    eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
+                    self.channel.send(ChannelMessage::Vtx(target)).unwrap();
                 }
-
-                self.channel.send(ChannelMessage::Vtx(target)).unwrap();
             }
         }
     }
 
-    fn load_vertices(&self, path: &PathBuf, parser: &(dyn Fn(&String) -> (i64, V) + Send + Sync)) {
+    fn load_vertices(
+        &self,
+        path: &PathBuf,
+        parser: &(dyn Fn(&String) -> Option<(i64, V)> + Send + Sync),
+    ) {
         let file = match File::open(path) {
             Ok(file) => file,
             Err(err) => panic!(
@@ -114,9 +118,10 @@ where
         let mut vertices = self.vertices.borrow_mut();
         for line in io::BufReader::new(file).lines() {
             if let Ok(line) = line {
-                let (id, value) = parser(&line);
-                let vertex = vertices.entry(id).or_insert(Vertex::new(id));
-                vertex.value = Some(value);
+                if let Some((id, value)) = parser(&line) {
+                    let vertex = vertices.entry(id).or_insert(Vertex::new(id));
+                    vertex.value = Some(value);
+                }
             }
         }
     }
