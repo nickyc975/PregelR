@@ -10,3 +10,8 @@ pub mod pregel {
     mod state;
     mod worker;
 }
+
+pub mod examples {
+    pub mod page_rank;
+    pub mod sssp;
+}
