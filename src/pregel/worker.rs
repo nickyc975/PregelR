@@ -69,63 +69,6 @@ where
         sum
     }
 
-    fn receive_message(&self, context: &RwLockReadGuard<Context<V, E, M>>, message: Message<M>) {
-        if let Some(vertex) = self.vertices.borrow_mut().get_mut(&message.receiver) {
-            let value = match (
-                context.combiner.as_ref(),
-                vertex.read_next_step_message(context),
-            ) {
-                (Some(combiner), Some(init)) => combiner.combine(init, message.value),
-                _ => message.value,
-            };
-            vertex.receive_message(context, value);
-            *self.n_msg_recv.borrow_mut() += 1;
-        }
-    }
-
-    fn add_vertex(&self, id: i64) {
-        self.vertices
-            .borrow_mut()
-            .entry(id)
-            .or_insert(Vertex::new(id));
-    }
-
-    pub fn run(&self) {
-        let now = Instant::now();
-        let context = self.context.read().unwrap();
-
-        match context.state {
-            State::INITIALIZED => self.load(&context),
-            State::LOADED => self.clean(),
-            State::CLEANED => self.compute(&context),
-            State::COMPUTED => self.clean(),
-        }
-
-        self.channel.send(ChannelMessage::Hlt).unwrap();
-
-        for message in &self.channel {
-            match message {
-                ChannelMessage::Msg(msg) => self.receive_message(&context, msg),
-                ChannelMessage::Vtx(id) => self.add_vertex(id),
-                ChannelMessage::Hlt => {
-                    unreachable!("Channel should never return ChannelMessage::Hlt!")
-                }
-            }
-        }
-
-        *self.time_cost.borrow_mut() = now.elapsed().as_millis();
-    }
-
-    pub fn report(&self, name: &String) -> Option<AggVal> {
-        self.aggregated_values.borrow_mut().remove(name)
-    }
-
-    fn clean(&self) {
-        self.aggregated_values.borrow_mut().clear();
-        *self.n_msg_recv.borrow_mut() = 0;
-        *self.n_msg_sent.borrow_mut() = 0;
-    }
-
     fn load_edges(
         &self,
         path: &PathBuf,
@@ -192,39 +135,27 @@ where
         *self.n_active_vertices.borrow_mut() = self.vertices.borrow().len() as i64;
     }
 
-    fn aggregate(
-        &self,
-        context: &RwLockReadGuard<Context<V, E, M>>,
-        name: &String,
-        vertex: &Vertex<V, E, M>,
-    ) {
-        match context.aggregators.get(name) {
-            Some(aggregator) => {
-                let new_val = aggregator.report(vertex);
-                let mut values_mut = self.aggregated_values.borrow_mut();
-                let (name, value) = match values_mut.remove_entry(name) {
-                    Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
-                    None => (name.clone(), new_val),
-                };
-                values_mut.insert(name, value);
-            }
-            None => (),
-        };
+    fn clean(&self) {
+        self.aggregated_values.borrow_mut().clear();
+        *self.n_msg_recv.borrow_mut() = 0;
+        *self.n_msg_sent.borrow_mut() = 0;
     }
 
-    fn send_messages_of(
+    fn collect_vertex_messages(
         &self,
         context: &RwLockReadGuard<Context<V, E, M>>,
         vertex: &Vertex<V, E, M>,
     ) {
+        let combiner_op = context.combiner.as_ref();
+        let mut queues = self.send_queues.borrow_mut();
         let mut send_queue = vertex.send_queue.borrow_mut();
+
         while let Some(mut message) = send_queue.pop_front() {
             let receiver = message.receiver;
-            let mut queues = self.send_queues.borrow_mut();
             let queue = queues.entry(receiver).or_insert(LinkedList::new());
 
-            message.value = match (context.combiner.as_ref(), queue.pop_front()) {
-                (Some(combine), Some(initial)) => combine.combine(message.value, initial.value),
+            message.value = match (combiner_op, queue.pop_front()) {
+                (Some(combiner), Some(initial)) => combiner.combine(message.value, initial.value),
                 _ => message.value,
             };
 
@@ -232,34 +163,97 @@ where
         }
     }
 
+    fn send_messages(&self) {
+        let mut n_msg_sent = self.n_msg_sent.borrow_mut();
+        let mut send_queues = self.send_queues.borrow_mut();
+
+        for (_, mut send_queue) in send_queues.drain() {
+            while let Some(message) = send_queue.pop_front() {
+                match self.channel.send(ChannelMessage::Msg(message)) {
+                    Ok(_) => *n_msg_sent += 1,
+                    Err(e) => eprintln!("Message sent failed: {}", e),
+                }
+            }
+        }
+    }
+
     fn compute(&self, context: &RwLockReadGuard<Context<V, E, M>>) {
+        let mut values_mut = self.aggregated_values.borrow_mut();
         let mut n_active_vertices = self.n_active_vertices.borrow_mut();
 
         *n_active_vertices = self.vertices.borrow().len() as i64;
         for vertex in self.vertices.borrow_mut().values_mut() {
+            // Initiate vertex activation status.
             vertex.activate();
 
             (context.compute)(vertex, context);
 
-            for name in context.aggregators.keys() {
-                self.aggregate(context, name, vertex);
+            for (name, aggregator) in &context.aggregators {
+                let new_val = aggregator.report(vertex);
+                let (name, value) = match values_mut.remove_entry(name) {
+                    Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
+                    None => (name.clone(), new_val),
+                };
+                values_mut.insert(name, value);
             }
 
-            self.send_messages_of(context, vertex);
+            // Collect vertex's pending messages for later sending.
+            self.collect_vertex_messages(context, vertex);
 
             *n_active_vertices -= if vertex.active() { 0 } else { 1 };
         }
 
-        let mut send_queues = self.send_queues.borrow_mut();
-        for (_, mut send_queue) in send_queues.drain() {
-            while let Some(message) = send_queue.pop_front() {
-                match self.channel.send(ChannelMessage::Msg(message)) {
-                    Ok(_) => *self.n_msg_sent.borrow_mut() += 1,
-                    Err(e) => {
-                        eprintln!("Message sent failed: {}", e);
-                    }
+        self.send_messages();
+    }
+
+    fn receive_message(&self, context: &RwLockReadGuard<Context<V, E, M>>, message: Message<M>) {
+        if let Some(vertex) = self.vertices.borrow_mut().get_mut(&message.receiver) {
+            let value = match (
+                context.combiner.as_ref(),
+                vertex.read_next_step_message(context),
+            ) {
+                (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                _ => message.value,
+            };
+            vertex.receive_message(context, value);
+            *self.n_msg_recv.borrow_mut() += 1;
+        }
+    }
+
+    fn add_vertex(&self, id: i64) {
+        self.vertices
+            .borrow_mut()
+            .entry(id)
+            .or_insert(Vertex::new(id));
+    }
+
+    pub fn run(&self) {
+        let now = Instant::now();
+        let context = self.context.read().unwrap();
+
+        match context.state {
+            State::INITIALIZED => self.load(&context),
+            State::LOADED => self.clean(),
+            State::CLEANED => self.compute(&context),
+            State::COMPUTED => self.clean(),
+        }
+
+        self.channel.send(ChannelMessage::Hlt).unwrap();
+
+        for message in &self.channel {
+            match message {
+                ChannelMessage::Msg(msg) => self.receive_message(&context, msg),
+                ChannelMessage::Vtx(id) => self.add_vertex(id),
+                ChannelMessage::Hlt => {
+                    unreachable!("Channel should never return ChannelMessage::Hlt!")
                 }
             }
         }
+
+        *self.time_cost.borrow_mut() = now.elapsed().as_millis();
+    }
+
+    pub fn report(&self, name: &String) -> Option<AggVal> {
+        self.aggregated_values.borrow_mut().remove(name)
     }
 }

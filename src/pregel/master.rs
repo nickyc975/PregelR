@@ -153,38 +153,58 @@ where
         }
     }
 
-    fn aggregate(&self, context: &RwLockWriteGuard<Context<V, E, M>>) {
-        match context.aggregated_values.write() {
-            Ok(mut aggregated_values) => {
-                println!("Superstep: {}", context.superstep);
+    fn print_stats(&self, context: &RwLockWriteGuard<Context<V, E, M>>) {
+        println!(
+            "Superstep: {}, num_vertices: {}, num_edges: {}",
+            context.superstep(),
+            context.num_vertices(),
+            context.num_edges()
+        );
 
-                aggregated_values.clear();
-                for worker in self.workers.values() {
-                    println!(
-                        "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, \
-                            msg_sent: {}, msg_recv: {}, time_cost: {} ms",
-                        worker.id,
-                        worker.n_active_vertices.borrow(),
-                        worker.local_n_vertices(),
-                        worker.local_n_edges(),
-                        worker.n_msg_sent.borrow(),
-                        worker.n_msg_recv.borrow(),
-                        worker.time_cost.borrow()
-                    );
+        for worker in self.workers.values() {
+            println!(
+                "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, \
+                    msg_sent: {}, msg_recv: {}, time_cost: {} ms",
+                worker.id,
+                worker.n_active_vertices.borrow(),
+                worker.local_n_vertices(),
+                worker.local_n_edges(),
+                worker.n_msg_sent.borrow(),
+                worker.n_msg_recv.borrow(),
+                worker.time_cost.borrow()
+            );
+        }
+    }
 
-                    for (name, aggregator) in context.aggregators.iter() {
-                        if let Some(new_val) = worker.report(&name) {
-                            let (name, value) = match aggregated_values.remove_entry(name) {
-                                Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
-                                None => (name.clone(), new_val),
-                            };
-                            aggregated_values.insert(name, value);
-                        }
-                    }
+    fn aggregate(&self, context: &mut RwLockWriteGuard<Context<V, E, M>>) {
+        let mut num_edges = 0;
+        let mut num_vertices = 0;
+
+        // We should always be able to get the write lock for context.aggregated_values,
+        // as we have got the write lock for context itself.
+        let mut aggregated_values = context.aggregated_values.write().unwrap();
+
+        aggregated_values.clear();
+        for worker in self.workers.values() {
+            num_edges += worker.local_n_edges();
+            num_vertices += worker.local_n_vertices();
+
+            for (name, aggregator) in context.aggregators.iter() {
+                if let Some(new_val) = worker.report(&name) {
+                    let (name, value) = match aggregated_values.remove_entry(name) {
+                        Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
+                        None => (name.clone(), new_val),
+                    };
+                    aggregated_values.insert(name, value);
                 }
             }
-            Err(_) => unreachable!(),
         }
+
+        // Drop the lock in advance so we can borrow context as mutable again.
+        drop(aggregated_values);
+
+        context.num_edges = num_edges;
+        context.num_vertices = num_vertices;
     }
 
     fn create_workers(&mut self) {
@@ -224,22 +244,15 @@ where
 
     fn update_state(&mut self) {
         let mut context = self.context.write().unwrap();
-        match context.state {
+        match context.state() {
             State::INITIALIZED => context.state = State::LOADED,
             State::LOADED => context.state = State::CLEANED,
             State::CLEANED => {
+                self.aggregate(&mut context);
+                self.print_stats(&context);
+
                 context.state = State::COMPUTED;
                 context.superstep += 1;
-
-                (context.num_edges, context.num_vertices) = self
-                    .workers
-                    .values()
-                    .map(|w| (w.local_n_edges(), w.local_n_vertices()))
-                    .fold((0, 0), |(init_n_e, init_n_v), (n_e, n_v)| {
-                        (init_n_e + n_e, init_n_v + n_v)
-                    });
-
-                self.aggregate(&context);
             }
             State::COMPUTED => context.state = State::CLEANED,
         }
@@ -249,10 +262,10 @@ where
         self.create_workers();
 
         let now = Instant::now();
+        let mut handles = Vec::new();
 
         self.n_active_workers = self.nworkers;
         while self.n_active_workers > 0 {
-            let mut handles = Vec::new();
             self.n_active_workers = self.nworkers;
 
             for (_, worker) in self.workers.drain() {
@@ -262,7 +275,7 @@ where
                 }));
             }
 
-            for handle in handles {
+            for handle in handles.drain(..) {
                 match handle.join() {
                     Ok(worker) => {
                         if *worker.n_active_vertices.borrow() <= 0 {
