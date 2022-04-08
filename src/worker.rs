@@ -1,4 +1,4 @@
-use super::channel::{Channel, ChannelMessage};
+use super::channel::{Channel, ChannelContent};
 use super::message::Message;
 use super::state::State;
 use super::AggVal;
@@ -95,7 +95,7 @@ where
                         eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
                     }
 
-                    self.channel.send(ChannelMessage::Vtx(target)).unwrap();
+                    self.channel.send(ChannelContent::Vertex(target));
                 }
             }
         }
@@ -141,17 +141,6 @@ where
         self.aggregated_values.clear();
     }
 
-    fn send_messages(&mut self) {
-        for (_, mut send_queue) in self.send_queues.drain() {
-            while let Some(message) = send_queue.pop_front() {
-                match self.channel.send(ChannelMessage::Msg(message)) {
-                    Ok(_) => self.n_msg_sent += 1,
-                    Err(e) => eprintln!("Message sent failed: {}", e),
-                }
-            }
-        }
-    }
-
     fn compute(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let combiner_op = context.combiner.as_ref();
         self.n_active_vertices = self.vertices.len() as i64;
@@ -160,8 +149,10 @@ where
             // Initiate vertex activation status.
             vertex.activate();
 
+            // Do computation.
             (context.compute)(vertex, context);
 
+            // Aggregate values from the vertex.
             for (name, aggregator) in &context.aggregators {
                 let new_val = aggregator.report(vertex);
                 let (name, value) = match self.aggregated_values.remove_entry(name) {
@@ -186,36 +177,41 @@ where
                     }
                     _ => message.value,
                 };
-
                 queue.push_back(message);
             }
 
+            // Update active vertex count.
             self.n_active_vertices -= if vertex.active() { 0 } else { 1 };
         }
 
-        self.send_messages();
+        // Send messages to other workers.
+        for send_queue in self.send_queues.values_mut() {
+            self.n_msg_sent += send_queue.len() as i64;
+            while let Some(message) = send_queue.pop_front() {
+                self.channel.send(ChannelContent::Message(message));
+            }
+        }
     }
 
     fn process_messages(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let combiner_op = context.combiner.as_ref();
 
-        for message in &self.channel {
-            match message {
-                ChannelMessage::Msg(msg) => {
-                    if let Some(vertex) = self.vertices.get_mut(&msg.receiver) {
+        for content in &self.channel {
+            match content {
+                ChannelContent::Message(message) => {
+                    if let Some(vertex) = self.vertices.get_mut(&message.receiver) {
                         let mut recv_queue = vertex.recv_queue.borrow_mut();
                         let value = match (combiner_op, recv_queue.pop_front()) {
-                            (Some(combiner), Some(init)) => combiner.combine(init, msg.value),
-                            _ => msg.value,
+                            (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                            _ => message.value,
                         };
                         recv_queue.push_back(value);
                         self.n_msg_recv += 1;
                     }
                 }
-                ChannelMessage::Vtx(id) => {
+                ChannelContent::Vertex(id) => {
                     self.vertices.entry(id).or_insert(Vertex::new(id));
                 }
-                ChannelMessage::Hlt => unreachable!(),
             }
         }
     }
@@ -224,18 +220,21 @@ where
         let now = Instant::now();
 
         match context.state {
-            State::INITIALIZED => self.load(context),
+            State::INITIALIZED => {
+                self.load(context);
+                self.channel.send_done();
+                self.process_messages(context);
+            }
             State::LOADED => self.clean(),
-            State::CLEANED => self.compute(context),
+            State::CLEANED => {
+                self.compute(context);
+                self.channel.send_done();
+                self.process_messages(context);
+            }
             State::COMPUTED => self.clean(),
         }
 
-        match self.channel.send(ChannelMessage::Hlt) {
-            Ok(_) => self.process_messages(context),
-            Err(e) => panic!("Send message failed: {}", e),
-        }
-
-        self.time_cost = now.elapsed().as_millis();
+        self.time_cost += now.elapsed().as_millis();
     }
 
     pub fn report(&self, name: &String) -> Option<AggVal> {

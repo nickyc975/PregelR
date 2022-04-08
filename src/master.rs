@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::spawn;
 use std::time::Instant;
 
@@ -217,24 +217,9 @@ where
     }
 
     fn create_workers(&mut self) {
-        let mut senderss = vec![Vec::new(); self.nworkers as usize];
-        let mut receivers = Vec::new();
-        for _ in 0..self.nworkers {
-            let (sender, receiver) = mpsc::channel();
-            for senders in &mut senderss {
-                senders.push(sender.clone());
-            }
-            receivers.push(receiver);
-        }
-
-        // Vec::pop() removes item from the end of the vector, which means we get receiver and senders
-        // at the order (self.nworkers-1)..0. Thus, we have to create workers in such order or we'll
-        // assign wrong receiver and senders to workers.
+        let mut channels = Channel::create(self.nworkers as usize);
         for i in (0..self.nworkers).rev() {
-            let mut worker = Worker::new(
-                i as i64,
-                Channel::new(receivers.pop().unwrap(), senderss.pop().unwrap()),
-            );
+            let mut worker = Worker::new(i, channels.remove(&i).unwrap());
 
             worker.edges_path = match self.edges_path.as_ref() {
                 Some(path) => Some(path.join(format!("{}.txt", i))),
