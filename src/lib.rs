@@ -1,6 +1,5 @@
 mod channel;
 mod message;
-mod state;
 mod worker;
 
 mod aggregate;

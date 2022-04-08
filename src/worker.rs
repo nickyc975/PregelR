@@ -1,9 +1,8 @@
 use super::channel::{Channel, ChannelContent};
 use super::message::Message;
-use super::state::State;
 use super::AggVal;
-use super::Context;
 use super::Vertex;
+use super::{Context, Operation};
 
 use std::collections::{HashMap, LinkedList};
 use std::fs::File;
@@ -142,6 +141,7 @@ where
     }
 
     fn compute(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
+        let mut removed = Vec::new();
         let combiner_op = context.combiner.as_ref();
         self.n_active_vertices = self.vertices.len() as i64;
 
@@ -151,6 +151,13 @@ where
 
             // Do computation.
             (context.compute)(vertex, context);
+
+            // The vertex is removed, skip all following operations.
+            if vertex.removed() {
+                self.n_active_vertices -= 1;
+                removed.push(vertex.id());
+                continue;
+            }
 
             // Aggregate values from the vertex.
             for (name, aggregator) in &context.aggregators {
@@ -184,8 +191,13 @@ where
             self.n_active_vertices -= if vertex.active() { 0 } else { 1 };
         }
 
+        // Remove vertices.
+        for id in removed {
+            self.vertices.remove(&id);
+        }
+
         // Send messages to other workers.
-        for send_queue in self.send_queues.values_mut() {
+        for (_, mut send_queue) in self.send_queues.drain() {
             self.n_msg_sent += send_queue.len() as i64;
             while let Some(message) = send_queue.pop_front() {
                 self.channel.send(ChannelContent::Message(message));
@@ -199,15 +211,20 @@ where
         for content in &self.channel {
             match content {
                 ChannelContent::Message(message) => {
-                    if let Some(vertex) = self.vertices.get_mut(&message.receiver) {
-                        let mut recv_queue = vertex.recv_queue.borrow_mut();
-                        let value = match (combiner_op, recv_queue.pop_front()) {
-                            (Some(combiner), Some(init)) => combiner.combine(init, message.value),
-                            _ => message.value,
-                        };
-                        recv_queue.push_back(value);
-                        self.n_msg_recv += 1;
-                    }
+                    let receiver_id = message.receiver;
+                    let vertex = self
+                        .vertices
+                        .entry(receiver_id)
+                        .or_insert(Vertex::new(receiver_id));
+
+                    let mut recv_queue = vertex.recv_queue.borrow_mut();
+                    let value = match (combiner_op, recv_queue.pop_front()) {
+                        (Some(combiner), Some(init)) => combiner.combine(init, message.value),
+                        _ => message.value,
+                    };
+
+                    recv_queue.push_back(value);
+                    self.n_msg_recv += 1;
                 }
                 ChannelContent::Vertex(id) => {
                     self.vertices.entry(id).or_insert(Vertex::new(id));
@@ -219,20 +236,16 @@ where
     pub fn run(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let now = Instant::now();
 
-        match context.state {
-            State::INITIALIZED => {
-                self.load(context);
-                self.channel.send_done();
-                self.process_messages(context);
-            }
-            State::LOADED => self.clean(),
-            State::CLEANED => {
+        match context.operation() {
+            Operation::Load => self.load(context),
+            Operation::Compute => {
+                self.clean();
                 self.compute(context);
-                self.channel.send_done();
-                self.process_messages(context);
             }
-            State::COMPUTED => self.clean(),
         }
+
+        self.channel.send_done();
+        self.process_messages(context);
 
         self.time_cost += now.elapsed().as_millis();
     }

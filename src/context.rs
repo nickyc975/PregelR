@@ -1,4 +1,3 @@
-use super::state::State;
 use super::Combine;
 use super::Vertex;
 use super::{AggVal, Aggregate};
@@ -7,13 +6,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
+#[derive(Clone, Copy)]
+pub enum Operation {
+    Load,
+    Compute,
+}
+
 pub struct Context<V, E, M>
 where
     V: 'static + Send,
     E: 'static + Send,
     M: 'static + Send + Clone,
 {
-    pub(crate) state: State,
+    pub(crate) operation: Operation,
     pub(crate) superstep: i64,
     pub(crate) num_edges: i64,
     pub(crate) num_vertices: i64,
@@ -46,7 +51,7 @@ where
         Context {
             compute,
             work_path,
-            state: State::INITIALIZED,
+            operation: Operation::Load,
             superstep: 0,
             num_edges: 0,
             num_vertices: 0,
@@ -58,8 +63,8 @@ where
         }
     }
 
-    pub fn state(&self) -> State {
-        self.state
+    pub fn operation(&self) -> Operation {
+        self.operation
     }
 
     pub fn superstep(&self) -> i64 {

@@ -13,6 +13,7 @@ where
     id: i64,
     pub value: Option<V>,
     active: bool,
+    removed: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
     pub(crate) recv_queue: RefCell<LinkedList<M>>,
     pub(crate) send_queue: RefCell<LinkedList<Message<M>>>,
@@ -29,6 +30,7 @@ where
             id,
             value: None,
             active: true,
+            removed: false,
             outer_edges: HashMap::new(),
             recv_queue: RefCell::new(LinkedList::new()),
             send_queue: RefCell::new(LinkedList::new()),
@@ -49,6 +51,14 @@ where
 
     pub fn deactivate(&mut self) {
         self.active = false;
+    }
+
+    pub fn remove(&mut self) {
+        self.removed = true;
+    }
+
+    pub fn removed(&self) -> bool {
+        self.removed
     }
 
     pub fn add_outer_edge(&mut self, edge: (i64, i64, E)) {

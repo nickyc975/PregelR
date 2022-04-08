@@ -1,10 +1,9 @@
 use super::channel::Channel;
-use super::state::State;
 use super::worker::Worker;
 use super::Aggregate;
 use super::Combine;
-use super::Context;
 use super::Vertex;
+use super::{Context, Operation};
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -235,22 +234,6 @@ where
         }
     }
 
-    fn update_state(&mut self) {
-        let mut context = self.context.write().unwrap();
-        match context.state() {
-            State::INITIALIZED => context.state = State::LOADED,
-            State::LOADED => context.state = State::CLEANED,
-            State::CLEANED => {
-                self.aggregate(&mut context);
-                self.print_stats(&context);
-
-                context.state = State::COMPUTED;
-                context.superstep += 1;
-            }
-            State::COMPUTED => context.state = State::CLEANED,
-        }
-    }
-
     pub fn run(&mut self) {
         self.create_workers();
 
@@ -271,13 +254,22 @@ where
 
             for handle in handles.drain(..) {
                 let worker = handle.join().unwrap();
-                if worker.n_active_vertices <= 0 {
+                if worker.n_active_vertices <= 0 && worker.n_msg_recv <= 0 {
                     self.n_active_workers -= 1;
                 }
                 self.workers.insert(worker.id, worker);
             }
 
-            self.update_state();
+            let mut context = self.context.write().unwrap();
+            match context.operation() {
+                Operation::Load => context.operation = Operation::Compute,
+                Operation::Compute => {
+                    self.aggregate(&mut context);
+                    self.print_stats(&context);
+                    context.superstep += 1;
+                }
+            }
+            drop(context);
         }
 
         println!("Total time cost: {} ms", now.elapsed().as_millis());
