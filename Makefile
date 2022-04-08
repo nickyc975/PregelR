@@ -8,3 +8,7 @@ run_page_rank:
 run_sssp:
 	rm -rf data/sssp
 	cargo run --example sssp --release
+
+run_virus:
+	rm -rf data/virus
+	cargo run --example virus --release
