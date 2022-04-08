@@ -152,13 +152,6 @@ where
             // Do computation.
             (context.compute)(vertex, context);
 
-            // The vertex is removed, skip all following operations.
-            if vertex.removed() {
-                self.n_active_vertices -= 1;
-                removed.push(vertex.id());
-                continue;
-            }
-
             // Aggregate values from the vertex.
             for (name, aggregator) in &context.aggregators {
                 let new_val = aggregator.report(vertex);
@@ -187,8 +180,15 @@ where
                 queue.push_back(message);
             }
 
-            // Update active vertex count.
-            self.n_active_vertices -= if vertex.active() { 0 } else { 1 };
+            if vertex.removed() {
+                // The vertex is removed, add it to the removed list and decrease the
+                // number of active vertices.
+                removed.push(vertex.id());
+                self.n_active_vertices -= 1;
+            } else if !vertex.active() {
+                // The vertex is inactive, decrease the number of active vertices.
+                self.n_active_vertices -= 1;
+            }
         }
 
         // Remove vertices.
