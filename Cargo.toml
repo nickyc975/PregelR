@@ -16,6 +16,10 @@ crate-type = ["bin"]
 name = "virus"
 crate-type = ["bin"]
 
+[[example]]
+name = "bin_tree"
+crate-type = ["bin"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

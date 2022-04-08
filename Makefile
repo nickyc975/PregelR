@@ -12,3 +12,7 @@ run_sssp:
 run_virus:
 	rm -rf data/virus
 	cargo run --example virus --release
+
+run_bin_tree:
+	rm -rf data/bin_tree
+	cargo run --example bin_tree --release
