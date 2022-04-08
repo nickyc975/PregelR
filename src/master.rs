@@ -175,12 +175,12 @@ where
                 "    worker: {}, n_active_vertices: {}, n_vertices: {}, n_edges: {}, \
                     msg_sent: {}, msg_recv: {}, time_cost: {} ms",
                 worker.id,
-                worker.n_active_vertices.borrow(),
+                worker.n_active_vertices,
                 worker.local_n_vertices(),
                 worker.local_n_edges(),
-                worker.n_msg_sent.borrow(),
-                worker.n_msg_recv.borrow(),
-                worker.time_cost.borrow()
+                worker.n_msg_sent,
+                worker.n_msg_recv,
+                worker.time_cost
             );
         }
     }
@@ -234,7 +234,6 @@ where
             let mut worker = Worker::new(
                 i as i64,
                 Channel::new(receivers.pop().unwrap(), senderss.pop().unwrap()),
-                Arc::clone(&self.context),
             );
 
             worker.edges_path = match self.edges_path.as_ref() {
@@ -277,23 +276,20 @@ where
         while self.n_active_workers > 0 {
             self.n_active_workers = self.nworkers;
 
-            for (_, worker) in self.workers.drain() {
+            for (_, mut worker) in self.workers.drain() {
+                let context = self.context.clone();
                 handles.push(spawn(move || {
-                    worker.run();
+                    worker.run(&context.read().unwrap());
                     worker
                 }));
             }
 
             for handle in handles.drain(..) {
-                match handle.join() {
-                    Ok(worker) => {
-                        if *worker.n_active_vertices.borrow() <= 0 {
-                            self.n_active_workers -= 1;
-                        }
-                        self.workers.insert(worker.id, worker);
-                    }
-                    Err(_) => (),
+                let worker = handle.join().unwrap();
+                if worker.n_active_vertices <= 0 {
+                    self.n_active_workers -= 1;
                 }
+                self.workers.insert(worker.id, worker);
             }
 
             self.update_state();

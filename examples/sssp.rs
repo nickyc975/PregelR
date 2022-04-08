@@ -57,8 +57,8 @@ fn compute(vertex: &mut Vertex<f64, f64, f64>, context: &RwLockReadGuard<Context
     } else {
         let orig = vertex.value.unwrap();
 
-        while vertex.has_messages(context) {
-            min = f64::min(min, vertex.read_message(context).unwrap());
+        while vertex.has_messages() {
+            min = f64::min(min, vertex.read_message().unwrap());
             if min < vertex.value.unwrap() {
                 vertex.value = Some(min);
             }
@@ -70,7 +70,7 @@ fn compute(vertex: &mut Vertex<f64, f64, f64>, context: &RwLockReadGuard<Context
         }
     }
 
-    for (_, target, edge) in vertex.get_outer_edges().values() {
+    for (_, target, edge) in vertex.get_outer_edges() {
         vertex.send_message_to(*target, edge + min);
     }
 }

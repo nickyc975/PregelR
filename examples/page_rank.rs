@@ -77,9 +77,9 @@ fn compute(vertex: &mut Vertex<f64, (), f64>, context: &RwLockReadGuard<Context<
         vertex.value = Some(0_f64);
     }
 
-    if vertex.has_messages(context) {
+    if vertex.has_messages() {
         let mut sum = 0_f64;
-        while let Some(msg) = vertex.read_message(context) {
+        while let Some(msg) = vertex.read_message() {
             sum += msg;
         }
         let value = 0.15_f64 / context.num_vertices() as f64 + 0.85_f64 * sum;

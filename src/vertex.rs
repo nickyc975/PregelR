@@ -1,10 +1,8 @@
 use super::message::Message;
-use super::Context;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::hash_map::{self, HashMap};
 use std::collections::LinkedList;
-use std::sync::RwLockReadGuard;
 
 pub struct Vertex<V, E, M>
 where
@@ -16,8 +14,7 @@ where
     pub value: Option<V>,
     active: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
-    odd_recv_queue: LinkedList<M>,
-    even_recv_queue: LinkedList<M>,
+    pub(crate) recv_queue: RefCell<LinkedList<M>>,
     pub(crate) send_queue: RefCell<LinkedList<Message<M>>>,
 }
 
@@ -33,8 +30,7 @@ where
             value: None,
             active: true,
             outer_edges: HashMap::new(),
-            odd_recv_queue: LinkedList::new(),
-            even_recv_queue: LinkedList::new(),
+            recv_queue: RefCell::new(LinkedList::new()),
             send_queue: RefCell::new(LinkedList::new()),
         }
     }
@@ -73,8 +69,8 @@ where
         self.outer_edges.get(&target)
     }
 
-    pub fn get_outer_edges(&self) -> &HashMap<i64, (i64, i64, E)> {
-        &self.outer_edges
+    pub fn get_outer_edges(&self) -> hash_map::Values<i64, (i64, i64, E)> {
+        self.outer_edges.values()
     }
 
     pub fn send_message_to(&self, receiver: i64, value: M) {
@@ -88,46 +84,11 @@ where
         }
     }
 
-    pub fn has_messages(&self, context: &RwLockReadGuard<Context<V, E, M>>) -> bool {
-        if context.superstep % 2 == 0 {
-            !self.odd_recv_queue.is_empty()
-        } else {
-            !self.even_recv_queue.is_empty()
-        }
+    pub fn has_messages(&self) -> bool {
+        !self.recv_queue.borrow().is_empty()
     }
 
-    pub fn read_message(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) -> Option<M> {
-        if context.superstep % 2 == 0 {
-            self.odd_recv_queue.pop_front()
-        } else {
-            self.even_recv_queue.pop_front()
-        }
-    }
-
-    pub fn receive_message(&mut self, context: &RwLockReadGuard<Context<V, E, M>>, message: M) {
-        if context.superstep % 2 == 0 {
-            self.even_recv_queue.push_back(message);
-        } else {
-            self.odd_recv_queue.push_back(message);
-        }
-    }
-
-    pub fn has_next_step_message(&self, context: &RwLockReadGuard<Context<V, E, M>>) -> bool {
-        if context.superstep % 2 == 0 {
-            !self.even_recv_queue.is_empty()
-        } else {
-            !self.odd_recv_queue.is_empty()
-        }
-    }
-
-    pub fn read_next_step_message(
-        &mut self,
-        context: &RwLockReadGuard<Context<V, E, M>>,
-    ) -> Option<M> {
-        if context.superstep % 2 == 0 {
-            self.even_recv_queue.pop_front()
-        } else {
-            self.odd_recv_queue.pop_front()
-        }
+    pub fn read_message(&mut self) -> Option<M> {
+        self.recv_queue.borrow_mut().pop_front()
     }
 }
