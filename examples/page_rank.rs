@@ -77,6 +77,11 @@ fn compute(vertex: &mut Vertex<f64, (), f64>, context: &RwLockReadGuard<Context<
         vertex.value = Some(0_f64);
     }
 
+    if context.superstep() > 30 {
+        vertex.deactivate();
+        return;
+    }
+
     if vertex.has_messages() {
         let mut sum = 0_f64;
         while let Some(msg) = vertex.read_message() {
@@ -88,10 +93,6 @@ fn compute(vertex: &mut Vertex<f64, (), f64>, context: &RwLockReadGuard<Context<
 
     let n = vertex.get_outer_edges().len();
     vertex.send_message(vertex.value.unwrap() / n as f64);
-
-    if context.superstep() > 30 {
-        vertex.deactivate();
-    }
 }
 
 fn edge_parser(s: &String) -> Option<(i64, i64, ())> {
