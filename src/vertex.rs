@@ -2,7 +2,6 @@ use super::message::Message;
 
 use std::cell::RefCell;
 use std::collections::hash_map::{self, HashMap};
-use std::collections::LinkedList;
 
 pub struct Vertex<V, E, M>
 where
@@ -15,8 +14,8 @@ where
     active: bool,
     removed: bool,
     outer_edges: HashMap<i64, (i64, i64, E)>,
-    pub(crate) recv_queue: RefCell<LinkedList<M>>,
-    pub(crate) send_queue: RefCell<LinkedList<Message<M>>>,
+    pub(crate) recv_queue: RefCell<Vec<M>>,
+    pub(crate) send_queue: RefCell<Vec<Message<M>>>,
 }
 
 impl<V, E, M> Vertex<V, E, M>
@@ -32,8 +31,8 @@ where
             active: true,
             removed: false,
             outer_edges: HashMap::new(),
-            recv_queue: RefCell::new(LinkedList::new()),
-            send_queue: RefCell::new(LinkedList::new()),
+            recv_queue: RefCell::new(Vec::new()),
+            send_queue: RefCell::new(Vec::new()),
         }
     }
 
@@ -85,7 +84,7 @@ where
 
     pub fn send_message_to(&self, receiver: i64, value: M) {
         let message = Message::new(value, self.id, receiver);
-        self.send_queue.borrow_mut().push_back(message);
+        self.send_queue.borrow_mut().push(message);
     }
 
     pub fn send_message(&self, value: M) {
@@ -99,6 +98,6 @@ where
     }
 
     pub fn read_message(&mut self) -> Option<M> {
-        self.recv_queue.borrow_mut().pop_front()
+        self.recv_queue.borrow_mut().pop()
     }
 }

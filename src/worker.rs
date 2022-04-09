@@ -4,7 +4,7 @@ use super::AggVal;
 use super::Vertex;
 use super::{Context, Operation};
 
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ where
     pub vertices: HashMap<i64, Vertex<V, E, M>>,
 
     channel: Channel<M>,
-    send_queues: HashMap<i64, LinkedList<Message<M>>>,
+    send_queues: HashMap<i64, Vec<Message<M>>>,
     aggregated_values: HashMap<String, AggVal>,
 }
 
@@ -164,20 +164,16 @@ where
 
             // Collect vertex's pending messages for later sending.
             let mut send_queue = vertex.send_queue.borrow_mut();
-            while let Some(mut message) = send_queue.pop_front() {
+            while let Some(mut message) = send_queue.pop() {
                 let receiver = message.receiver;
-                let queue = self
-                    .send_queues
-                    .entry(receiver)
-                    .or_insert(LinkedList::new());
-
-                message.value = match (combiner_op, queue.pop_front()) {
+                let queue = self.send_queues.entry(receiver).or_insert(Vec::new());
+                message.value = match (combiner_op, queue.pop()) {
                     (Some(combiner), Some(initial)) => {
                         combiner.combine(message.value, initial.value)
                     }
                     _ => message.value,
                 };
-                queue.push_back(message);
+                queue.push(message);
             }
 
             if vertex.removed() {
@@ -197,9 +193,9 @@ where
         }
 
         // Send messages to other workers.
-        for (_, mut send_queue) in self.send_queues.drain() {
+        for send_queue in self.send_queues.values_mut() {
             self.n_msg_sent += send_queue.len() as i64;
-            while let Some(message) = send_queue.pop_front() {
+            while let Some(message) = send_queue.pop() {
                 self.channel.send(ChannelContent::Message(message));
             }
         }
@@ -218,12 +214,12 @@ where
                         .or_insert(Vertex::new(receiver_id));
 
                     let mut recv_queue = vertex.recv_queue.borrow_mut();
-                    let value = match (combiner_op, recv_queue.pop_front()) {
+                    let value = match (combiner_op, recv_queue.pop()) {
                         (Some(combiner), Some(init)) => combiner.combine(init, message.value),
                         _ => message.value,
                     };
 
-                    recv_queue.push_back(value);
+                    recv_queue.push(value);
                     self.n_msg_recv += 1;
                 }
                 ChannelContent::Vertex(id) => {
