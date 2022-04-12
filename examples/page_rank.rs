@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::RwLockReadGuard;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 struct PageRankCombiner;
 
@@ -22,11 +22,11 @@ impl Combine<f64> for PageRankCombiner {
 struct PageRankMaxVertexAggregator;
 
 impl Aggregate<f64, (), f64> for PageRankMaxVertexAggregator {
-    fn report(&self, v: &Vertex<f64, (), f64>) -> AggVal {
-        Arc::new((v.id(), v.value))
+    fn report(&self, v: &Vertex<f64, (), f64>) -> Box<AggVal> {
+        Box::new((v.id(), v.value))
     }
 
-    fn aggregate(&self, a: AggVal, b: AggVal) -> AggVal {
+    fn aggregate(&self, a: Box<AggVal>, b: Box<AggVal>) -> Box<AggVal> {
         match (
             a.downcast::<(i64, Option<f64>)>(),
             b.downcast::<(i64, Option<f64>)>(),
@@ -39,9 +39,9 @@ impl Aggregate<f64, (), f64> for PageRankMaxVertexAggregator {
                         b_val
                     }
                 }
-                _ => Arc::new((-1, Some(f64::NEG_INFINITY))),
+                _ => Box::new((-1, Some(f64::NEG_INFINITY))),
             },
-            _ => Arc::new((-1, Some(f64::NEG_INFINITY))),
+            _ => Box::new((-1, Some(f64::NEG_INFINITY))),
         }
     }
 }
@@ -49,13 +49,13 @@ impl Aggregate<f64, (), f64> for PageRankMaxVertexAggregator {
 struct PageRankVertexWeightAggregator;
 
 impl Aggregate<f64, (), f64> for PageRankVertexWeightAggregator {
-    fn report(&self, v: &Vertex<f64, (), f64>) -> AggVal {
+    fn report(&self, v: &Vertex<f64, (), f64>) -> Box<AggVal> {
         let mut val = LinkedList::new();
         val.push_back((v.id(), v.value));
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 
-    fn aggregate(&self, a: AggVal, b: AggVal) -> AggVal {
+    fn aggregate(&self, a: Box<AggVal>, b: Box<AggVal>) -> Box<AggVal> {
         let mut val: LinkedList<(i64, Option<f64>)> = LinkedList::new();
 
         match a.downcast::<Mutex<LinkedList<(i64, Option<f64>)>>>() {
@@ -68,7 +68,7 @@ impl Aggregate<f64, (), f64> for PageRankVertexWeightAggregator {
             _ => (),
         }
 
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 }
 
@@ -92,7 +92,9 @@ fn compute(vertex: &mut Vertex<f64, (), f64>, context: &RwLockReadGuard<Context<
     }
 
     let n = vertex.get_outer_edges().len();
-    vertex.send_message(vertex.value.unwrap() / n as f64);
+    for (_, t, _) in vertex.get_outer_edges() {
+        vertex.send_message_to(*t, vertex.value.unwrap() / n as f64);
+    }
 }
 
 fn edge_parser(s: &String) -> Option<(i64, i64, ())> {

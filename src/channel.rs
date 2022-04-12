@@ -3,34 +3,22 @@ use super::message::Message;
 use std::collections::HashMap;
 use std::sync::mpsc;
 
-pub enum ChannelContent<M>
-where
-    M: 'static + Send + Clone,
-{
+pub enum ChannelContent<M> {
     Message(Message<M>),
     Vertex(i64),
 }
 
-enum ChannelMessage<M>
-where
-    M: 'static + Send + Clone,
-{
+enum ChannelMessage<M> {
     Content(ChannelContent<M>),
     HaltCmd,
 }
 
-pub struct Channel<M>
-where
-    M: 'static + Send + Clone,
-{
+pub struct Channel<M> {
     receiver: mpsc::Receiver<ChannelMessage<M>>,
     senders: Vec<mpsc::Sender<ChannelMessage<M>>>,
 }
 
-impl<M> Channel<M>
-where
-    M: 'static + Send + Clone,
-{
+impl<M> Channel<M> {
     pub fn create(n: usize) -> HashMap<i64, Channel<M>> {
         let mut channels = HashMap::new();
 
@@ -86,10 +74,7 @@ where
     }
 }
 
-impl<'a, M> IntoIterator for &'a Channel<M>
-where
-    M: 'static + Send + Clone,
-{
+impl<'a, M> IntoIterator for &'a Channel<M> {
     type Item = ChannelContent<M>;
     type IntoIter = ChannelIterator<'a, M>;
 
@@ -101,18 +86,12 @@ where
     }
 }
 
-pub struct ChannelIterator<'a, M>
-where
-    M: 'static + Send + Clone,
-{
+pub struct ChannelIterator<'a, M> {
     hlt_cnt: i64,
     channel: &'a Channel<M>,
 }
 
-impl<'a, M> Iterator for ChannelIterator<'a, M>
-where
-    M: 'static + Send + Clone,
-{
+impl<'a, M> Iterator for ChannelIterator<'a, M> {
     type Item = ChannelContent<M>;
 
     fn next(&mut self) -> Option<ChannelContent<M>> {

@@ -26,7 +26,9 @@ fn compute(vertex: &mut Vertex<(), (), bool>, _: &RwLockReadGuard<Context<(), ()
     }
 
     if vertex.removed() {
-        vertex.send_message(true);
+        for (_, t, _) in vertex.get_outer_edges() {
+            vertex.send_message_to(*t, true);
+        }
     }
 }
 

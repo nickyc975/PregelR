@@ -8,20 +8,20 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::RwLockReadGuard;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 struct BinTreeAggregator;
 
 impl Aggregate<(), (), ()> for BinTreeAggregator {
-    fn report(&self, v: &Vertex<(), (), ()>) -> AggVal {
+    fn report(&self, v: &Vertex<(), (), ()>) -> Box<AggVal> {
         let mut val = LinkedList::new();
         for e in v.get_outer_edges() {
             val.push_back((e.0, e.1));
         }
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 
-    fn aggregate(&self, a: AggVal, b: AggVal) -> AggVal {
+    fn aggregate(&self, a: Box<AggVal>, b: Box<AggVal>) -> Box<AggVal> {
         let mut val: LinkedList<(i64, i64)> = LinkedList::new();
 
         match a.downcast::<Mutex<LinkedList<(i64, i64)>>>() {
@@ -34,7 +34,7 @@ impl Aggregate<(), (), ()> for BinTreeAggregator {
             _ => (),
         }
 
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 }
 

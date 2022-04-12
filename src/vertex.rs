@@ -3,12 +3,7 @@ use super::message::Message;
 use std::cell::RefCell;
 use std::collections::hash_map::{self, HashMap};
 
-pub struct Vertex<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+pub struct Vertex<V, E, M> {
     id: i64,
     pub value: Option<V>,
     active: bool,
@@ -18,12 +13,7 @@ where
     pub(crate) send_queue: RefCell<Vec<Message<M>>>,
 }
 
-impl<V, E, M> Vertex<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+impl<V, E, M> Vertex<V, E, M> {
     pub fn new(id: i64) -> Self {
         Vertex {
             id,
@@ -85,12 +75,6 @@ where
     pub fn send_message_to(&self, receiver: i64, value: M) {
         let message = Message::new(value, self.id, receiver);
         self.send_queue.borrow_mut().push(message);
-    }
-
-    pub fn send_message(&self, value: M) {
-        for target in self.outer_edges.keys() {
-            self.send_message_to(*target, value.clone());
-        }
     }
 
     pub fn has_messages(&self) -> bool {

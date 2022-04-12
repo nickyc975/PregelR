@@ -4,7 +4,7 @@ use super::{AggVal, Aggregate};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, RwLockReadGuard};
 
 #[derive(Clone, Copy)]
 pub enum Operation {
@@ -12,12 +12,7 @@ pub enum Operation {
     Compute,
 }
 
-pub struct Context<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+pub struct Context<V, E, M> {
     pub(crate) operation: Operation,
     pub(crate) superstep: i64,
     pub(crate) num_edges: i64,
@@ -33,15 +28,10 @@ where
 
     pub(crate) combiner: Option<Box<dyn Combine<M>>>,
     pub(crate) aggregators: HashMap<String, Box<dyn Aggregate<V, E, M>>>,
-    pub(crate) aggregated_values: RwLock<HashMap<String, AggVal>>,
+    pub(crate) aggregated_values: HashMap<String, Arc<AggVal>>,
 }
 
-impl<V, E, M> Context<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+impl<V, E, M> Context<V, E, M> {
     pub fn new(
         compute: Box<
             dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync,
@@ -59,7 +49,7 @@ where
             vertex_parser: None,
             combiner: None,
             aggregators: HashMap::new(),
-            aggregated_values: RwLock::new(HashMap::new()),
+            aggregated_values: HashMap::new(),
         }
     }
 
@@ -80,15 +70,12 @@ where
     }
 
     pub fn get_aggregated_value<T: 'static + Send + Sync>(&self, name: &String) -> Option<Arc<T>> {
-        match self.aggregated_values.read() {
-            Ok(aggregated_values) => match aggregated_values.get(name) {
-                Some(value_box) => match value_box.clone().downcast::<T>() {
-                    Ok(value) => Some(value),
-                    Err(_) => None,
-                },
-                None => None,
+        match self.aggregated_values.get(name) {
+            Some(value_box) => match value_box.clone().downcast::<T>() {
+                Ok(value) => Some(value),
+                Err(_) => None,
             },
-            Err(_) => None,
+            None => None,
         }
     }
 }

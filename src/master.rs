@@ -17,7 +17,7 @@ pub struct Master<V, E, M>
 where
     V: 'static + Send,
     E: 'static + Send,
-    M: 'static + Send + Clone,
+    M: 'static + Send,
 {
     nworkers: i64,
     n_active_workers: i64,
@@ -31,7 +31,7 @@ impl<V, E, M> Master<V, E, M>
 where
     V: 'static + Send,
     E: 'static + Send,
-    M: 'static + Send + Clone,
+    M: 'static + Send,
 {
     pub fn new(
         nworkers: i64,
@@ -185,17 +185,13 @@ where
     }
 
     fn aggregate(&self, context: &mut RwLockWriteGuard<Context<V, E, M>>) {
-        let mut num_edges = 0;
-        let mut num_vertices = 0;
+        let mut aggregated_values = HashMap::new();
 
-        // We should always be able to get the write lock for context.aggregated_values,
-        // as we have got the write lock for context itself.
-        let mut aggregated_values = context.aggregated_values.write().unwrap();
-
-        aggregated_values.clear();
+        context.num_edges = 0;
+        context.num_vertices = 0;
         for worker in self.workers.values() {
-            num_edges += worker.local_n_edges();
-            num_vertices += worker.local_n_vertices();
+            context.num_edges += worker.local_n_edges();
+            context.num_vertices += worker.local_n_vertices();
 
             for (name, aggregator) in context.aggregators.iter() {
                 if let Some(new_val) = worker.report(&name) {
@@ -208,11 +204,13 @@ where
             }
         }
 
-        // Drop the lock in advance so we can borrow context as mutable again.
-        drop(aggregated_values);
-
-        context.num_edges = num_edges;
-        context.num_vertices = num_vertices;
+        // Extend operation will overwrite existing values automatically,
+        // so we don't need clear().
+        context.aggregated_values.extend(
+            aggregated_values
+                .drain()
+                .map(|(name, value)| (name, Arc::from(value))),
+        );
     }
 
     fn create_workers(&mut self) {

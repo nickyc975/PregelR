@@ -4,6 +4,7 @@ use super::AggVal;
 use super::Vertex;
 use super::{Context, Operation};
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead};
@@ -11,12 +12,7 @@ use std::path::PathBuf;
 use std::sync::RwLockReadGuard;
 use std::time::Instant;
 
-pub struct Worker<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+pub struct Worker<V, E, M> {
     pub id: i64,
     pub time_cost: u128,
     pub n_msg_sent: i64,
@@ -28,15 +24,10 @@ where
 
     channel: Channel<M>,
     send_queues: HashMap<i64, Vec<Message<M>>>,
-    aggregated_values: HashMap<String, AggVal>,
+    aggregated_values: RefCell<HashMap<String, Box<AggVal>>>,
 }
 
-impl<V, E, M> Worker<V, E, M>
-where
-    V: 'static + Send,
-    E: 'static + Send,
-    M: 'static + Send + Clone,
-{
+impl<V, E, M> Worker<V, E, M> {
     pub fn new(id: i64, channel: Channel<M>) -> Self {
         Worker {
             id,
@@ -50,7 +41,7 @@ where
 
             channel,
             send_queues: HashMap::new(),
-            aggregated_values: HashMap::new(),
+            aggregated_values: RefCell::new(HashMap::new()),
         }
     }
 
@@ -137,14 +128,15 @@ where
         self.time_cost = 0;
         self.n_msg_recv = 0;
         self.n_msg_sent = 0;
-        self.aggregated_values.clear();
+        self.aggregated_values.borrow_mut().clear();
     }
 
     fn compute(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let mut removed = Vec::new();
         let combiner_op = context.combiner.as_ref();
-        self.n_active_vertices = self.vertices.len() as i64;
+        let mut aggregated_values = self.aggregated_values.borrow_mut();
 
+        self.n_active_vertices = self.vertices.len() as i64;
         for vertex in self.vertices.values_mut() {
             // Initiate vertex activation status.
             vertex.activate();
@@ -155,11 +147,11 @@ where
             // Aggregate values from the vertex.
             for (name, aggregator) in &context.aggregators {
                 let new_val = aggregator.report(vertex);
-                let (name, value) = match self.aggregated_values.remove_entry(name) {
+                let (name, value) = match aggregated_values.remove_entry(name) {
                     Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
                     None => (name.clone(), new_val),
                 };
-                self.aggregated_values.insert(name, value);
+                aggregated_values.insert(name, value);
             }
 
             // Collect vertex's pending messages for later sending.
@@ -246,9 +238,9 @@ where
         self.time_cost += now.elapsed().as_millis();
     }
 
-    pub fn report(&self, name: &String) -> Option<AggVal> {
-        match self.aggregated_values.get(name) {
-            Some(value) => Some(value.clone()),
+    pub fn report(&self, name: &String) -> Option<Box<AggVal>> {
+        match self.aggregated_values.borrow_mut().remove(name) {
+            Some(value) => Some(value),
             None => None,
         }
     }

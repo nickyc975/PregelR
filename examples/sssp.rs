@@ -8,8 +8,8 @@ use std::collections::LinkedList;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::RwLockReadGuard;
-use std::sync::{Arc, Mutex};
 
 struct SSSPCombiner;
 
@@ -22,13 +22,13 @@ impl Combine<f64> for SSSPCombiner {
 struct SSSPAggregator;
 
 impl Aggregate<f64, f64, f64> for SSSPAggregator {
-    fn report(&self, v: &Vertex<f64, f64, f64>) -> AggVal {
+    fn report(&self, v: &Vertex<f64, f64, f64>) -> Box<AggVal> {
         let mut val = LinkedList::new();
         val.push_back((v.id(), v.value));
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 
-    fn aggregate(&self, a: AggVal, b: AggVal) -> AggVal {
+    fn aggregate(&self, a: Box<AggVal>, b: Box<AggVal>) -> Box<AggVal> {
         let mut val: LinkedList<(i64, Option<f64>)> = LinkedList::new();
 
         match a.downcast::<Mutex<LinkedList<(i64, Option<f64>)>>>() {
@@ -41,7 +41,7 @@ impl Aggregate<f64, f64, f64> for SSSPAggregator {
             _ => (),
         }
 
-        Arc::new(Mutex::new(val))
+        Box::new(Mutex::new(val))
     }
 }
 
