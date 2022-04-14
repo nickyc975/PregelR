@@ -1,4 +1,4 @@
-use super::channel::{Channel, ChannelContent};
+use super::channel::{Channel, ChannelMessage};
 use super::message::Message;
 use super::AggVal;
 use super::Vertex;
@@ -85,7 +85,7 @@ impl<V, E, M> Worker<V, E, M> {
                         eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
                     }
 
-                    self.channel.send(ChannelContent::Vertex(target));
+                    self.channel.send(ChannelMessage::Vertex(target));
                 }
             }
         }
@@ -188,7 +188,7 @@ impl<V, E, M> Worker<V, E, M> {
         for send_queue in self.send_queues.values_mut() {
             self.n_msg_sent += send_queue.len() as i64;
             while let Some(message) = send_queue.pop() {
-                self.channel.send(ChannelContent::Message(message));
+                self.channel.send(ChannelMessage::Message(message));
             }
         }
     }
@@ -198,7 +198,7 @@ impl<V, E, M> Worker<V, E, M> {
 
         for content in &self.channel {
             match content {
-                ChannelContent::Message(message) => {
+                ChannelMessage::Message(message) => {
                     let receiver_id = message.receiver;
                     let vertex = self
                         .vertices
@@ -214,7 +214,7 @@ impl<V, E, M> Worker<V, E, M> {
                     recv_queue.push(value);
                     self.n_msg_recv += 1;
                 }
-                ChannelContent::Vertex(id) => {
+                ChannelMessage::Vertex(id) => {
                     self.vertices.entry(id).or_insert(Vertex::new(id));
                 }
             }
@@ -232,7 +232,7 @@ impl<V, E, M> Worker<V, E, M> {
             }
         }
 
-        self.channel.send_done();
+        self.channel.flush();
         self.process_messages(context);
 
         self.time_cost += now.elapsed().as_millis();

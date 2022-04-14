@@ -81,7 +81,7 @@ impl<V, E, M> Vertex<V, E, M> {
         !self.recv_queue.borrow().is_empty()
     }
 
-    pub fn read_message(&mut self) -> Option<M> {
+    pub fn read_message(&self) -> Option<M> {
         self.recv_queue.borrow_mut().pop()
     }
 }

@@ -8,8 +8,8 @@ use std::collections::LinkedList;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::RwLockReadGuard;
 use std::sync::Mutex;
+use std::sync::RwLockReadGuard;
 
 struct PageRankCombiner;
 
@@ -124,7 +124,7 @@ fn vertex_parser(s: &String) -> Option<(i64, f64)> {
 pub fn page_rank(work_path: &str, edges_path: &str, output_path: &str) {
     let max_vertex_key = "max_vertex".to_string();
     let vertex_weights_key = "vertex_weights".to_string();
-    let mut master = Master::new(8, Box::new(compute), Path::new(work_path));
+    let mut master = Master::new(8, 128, Box::new(compute), Path::new(work_path));
 
     master
         .set_edge_parser(Box::new(edge_parser))

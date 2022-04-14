@@ -20,6 +20,7 @@ where
     M: 'static + Send,
 {
     nworkers: i64,
+    msg_batch_size: usize,
     n_active_workers: i64,
     edges_path: Option<PathBuf>,
     vertices_path: Option<PathBuf>,
@@ -35,11 +36,15 @@ where
 {
     pub fn new(
         nworkers: i64,
+        msg_batch_size: usize,
         compute: Box<
             dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync,
         >,
         work_path: &Path,
     ) -> Self {
+        assert_eq!(nworkers > 0, true);
+        assert_eq!(msg_batch_size > 0, true);
+
         if work_path.exists() {
             panic!("Work path {} exists!", work_path.to_string_lossy());
         } else {
@@ -51,6 +56,7 @@ where
 
         Master {
             nworkers,
+            msg_batch_size,
             n_active_workers: 0,
             edges_path: None,
             vertices_path: None,
@@ -214,7 +220,7 @@ where
     }
 
     fn create_workers(&mut self) {
-        let mut channels = Channel::create(self.nworkers as usize);
+        let mut channels = Channel::create(self.nworkers as usize, self.msg_batch_size);
         for i in (0..self.nworkers).rev() {
             let mut worker = Worker::new(i, channels.remove(&i).unwrap());
 

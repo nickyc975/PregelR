@@ -67,7 +67,7 @@ fn vertex_parser(s: &String) -> Option<(i64, ())> {
 
 pub fn bin_tree(work_path: &str, vertices_path: &str, output_path: &str) {
     let edges_key = "edges".to_string();
-    let mut master = Master::new(8, Box::new(compute), Path::new(work_path));
+    let mut master = Master::new(8, 128, Box::new(compute), Path::new(work_path));
 
     master
         .set_vertex_parser(Box::new(vertex_parser))

@@ -1,29 +1,43 @@
 use super::message::Message;
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::sync::mpsc;
 
-pub enum ChannelContent<M> {
+pub enum ChannelMessage<M> {
     Message(Message<M>),
     Vertex(i64),
 }
 
-enum ChannelMessage<M> {
-    Content(ChannelContent<M>),
-    HaltCmd,
+struct ChannelMessageBatch<M>(Vec<ChannelMessage<M>>);
+
+impl<M> Deref for ChannelMessageBatch<M> {
+    type Target = Vec<ChannelMessage<M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<M> DerefMut for ChannelMessageBatch<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 pub struct Channel<M> {
-    receiver: mpsc::Receiver<ChannelMessage<M>>,
-    senders: Vec<mpsc::Sender<ChannelMessage<M>>>,
+    batch_size: usize,
+    batches: Vec<ChannelMessageBatch<M>>,
+    receiver: mpsc::Receiver<ChannelMessageBatch<M>>,
+    senders: Vec<mpsc::Sender<ChannelMessageBatch<M>>>,
 }
 
 impl<M> Channel<M> {
-    pub fn create(n: usize) -> HashMap<i64, Channel<M>> {
+    pub fn create(n: usize, batch_size: usize) -> HashMap<i64, Channel<M>> {
         let mut channels = HashMap::new();
-
         let mut receivers = Vec::with_capacity(n);
         let mut senderss = vec![Vec::with_capacity(n); n];
+
         for _ in 0..n {
             let (sender, receiver) = mpsc::channel();
             for senders in &mut senderss {
@@ -36,7 +50,11 @@ impl<M> Channel<M> {
         // at the order (self.nworkers-1)..0. Thus, we have to create workers in such order or we'll
         // assign wrong receiver and senders to workers.
         for i in (0..n).rev() {
-            let channel = Channel::new(receivers.pop().unwrap(), senderss.pop().unwrap());
+            let channel = Channel::new(
+                batch_size,
+                receivers.pop().unwrap(),
+                senderss.pop().unwrap(),
+            );
             channels.insert(i as i64, channel);
         }
 
@@ -44,30 +62,53 @@ impl<M> Channel<M> {
     }
 
     fn new(
-        receiver: mpsc::Receiver<ChannelMessage<M>>,
-        senders: Vec<mpsc::Sender<ChannelMessage<M>>>,
+        batch_size: usize,
+        receiver: mpsc::Receiver<ChannelMessageBatch<M>>,
+        senders: Vec<mpsc::Sender<ChannelMessageBatch<M>>>,
     ) -> Self {
-        Channel { receiver, senders }
-    }
+        let mut batches = Vec::with_capacity(senders.len());
 
-    pub fn send(&self, content: ChannelContent<M>) {
-        let index = match &content {
-            ChannelContent::Message(message) => {
-                (message.receiver % self.senders.len() as i64) as usize
-            }
-            ChannelContent::Vertex(id) => (id % self.senders.len() as i64) as usize,
-        };
+        for _ in 0..senders.len() {
+            batches.push(ChannelMessageBatch(Vec::with_capacity(batch_size)));
+        }
 
-        match self.senders[index].send(ChannelMessage::Content(content)) {
-            Err(e) => eprintln!("Send message content failed: {}", e),
-            _ => (),
+        Channel {
+            batch_size,
+            batches,
+            receiver,
+            senders,
         }
     }
 
-    pub fn send_done(&self) {
-        for sender in &self.senders {
-            match sender.send(ChannelMessage::HaltCmd) {
-                Err(e) => eprintln!("Send halt command failed: {}", e),
+    pub fn send(&mut self, message: ChannelMessage<M>) {
+        let index = match &message {
+            ChannelMessage::Message(msg) => (msg.receiver % self.senders.len() as i64) as usize,
+            ChannelMessage::Vertex(id) => (id % self.senders.len() as i64) as usize,
+        };
+
+        self.batches[index].push(message);
+        if self.batches[index].len() >= self.batch_size {
+            let batch = std::mem::replace(
+                &mut self.batches[index],
+                ChannelMessageBatch(Vec::with_capacity(self.batch_size)),
+            );
+
+            match self.senders[index].send(batch) {
+                Err(e) => eprintln!("Send message content failed: {}", e),
+                _ => (),
+            }
+        }
+    }
+
+    pub fn flush(&mut self) {
+        for index in 0..self.batches.len() {
+            let batch = std::mem::replace(
+                &mut self.batches[index],
+                ChannelMessageBatch(Vec::with_capacity(self.batch_size)),
+            );
+
+            match self.senders[index].send(batch) {
+                Err(e) => eprintln!("Send message content failed: {}", e),
                 _ => (),
             }
         }
@@ -75,40 +116,45 @@ impl<M> Channel<M> {
 }
 
 impl<'a, M> IntoIterator for &'a Channel<M> {
-    type Item = ChannelContent<M>;
+    type Item = ChannelMessage<M>;
     type IntoIter = ChannelIterator<'a, M>;
 
     fn into_iter(self) -> Self::IntoIter {
         ChannelIterator {
-            hlt_cnt: 0,
             channel: self,
+            sender_cnt: self.senders.len(),
+            done_cnt: 0,
+            batch: ChannelMessageBatch(Vec::new()),
         }
     }
 }
 
 pub struct ChannelIterator<'a, M> {
-    hlt_cnt: i64,
     channel: &'a Channel<M>,
+    sender_cnt: usize,
+    done_cnt: usize,
+    batch: ChannelMessageBatch<M>,
 }
 
 impl<'a, M> Iterator for ChannelIterator<'a, M> {
-    type Item = ChannelContent<M>;
+    type Item = ChannelMessage<M>;
 
-    fn next(&mut self) -> Option<ChannelContent<M>> {
-        while let Ok(channel_message) = self.channel.receiver.recv() {
-            match channel_message {
-                ChannelMessage::Content(content) => {
-                    return Some(content);
-                }
-                ChannelMessage::HaltCmd => {
-                    self.hlt_cnt += 1;
-                    if self.hlt_cnt >= self.channel.senders.len() as i64 {
-                        return None;
+    fn next(&mut self) -> Option<ChannelMessage<M>> {
+        while self.batch.is_empty() && self.done_cnt < self.sender_cnt {
+            match self.channel.receiver.recv() {
+                Ok(batch) => {
+                    self.batch = batch;
+                    if self.batch.len() < self.channel.batch_size {
+                        self.done_cnt += 1;
                     }
+                }
+                Err(e) => {
+                    eprintln!("Receive error: {}", e);
+                    return None;
                 }
             }
         }
 
-        None
+        self.batch.pop()
     }
 }

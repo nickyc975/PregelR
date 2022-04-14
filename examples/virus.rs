@@ -57,7 +57,7 @@ fn vertex_parser(s: &String) -> Option<(i64, ())> {
 }
 
 pub fn virus(work_path: &str, edges_path: &str) {
-    let mut master = Master::new(8, Box::new(compute), Path::new(work_path));
+    let mut master = Master::new(8, 128, Box::new(compute), Path::new(work_path));
 
     master
         .set_edge_parser(Box::new(edge_parser))

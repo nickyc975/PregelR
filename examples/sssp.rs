@@ -101,7 +101,7 @@ fn vertex_parser(s: &String) -> Option<(i64, f64)> {
 
 pub fn single_source_shortest_path(work_path: &str, edges_path: &str, output_path: &str) {
     let path_lengths_key = "path_lengths".to_string();
-    let mut master = Master::new(8, Box::new(compute), Path::new(work_path));
+    let mut master = Master::new(8, 128, Box::new(compute), Path::new(work_path));
 
     master
         .set_edge_parser(Box::new(edge_parser))
