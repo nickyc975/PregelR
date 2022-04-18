@@ -90,6 +90,9 @@ impl<V, E, M> Worker<V, E, M> {
                 self.channel.send(ChannelMessage::Vertex(target));
             }
         }
+
+        // Flush vertex messages.
+        self.channel.flush();
     }
 
     fn load_vertices(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
@@ -123,18 +126,12 @@ impl<V, E, M> Worker<V, E, M> {
         self.n_active_vertices = self.vertices.len() as i64;
     }
 
-    fn clean(&mut self) {
-        self.time_cost = 0;
-        self.n_msg_recv = 0;
-        self.n_msg_sent = 0;
-        self.aggregated_values.borrow_mut().clear();
-    }
-
     fn compute(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let mut removed = Vec::new();
         let combiner_op = context.combiner.as_ref();
         let mut aggregated_values = self.aggregated_values.borrow_mut();
 
+        aggregated_values.clear();
         self.n_active_vertices = self.vertices.len() as i64;
         for vertex in self.vertices.values_mut() {
             // Initiate vertex activation status.
@@ -154,16 +151,19 @@ impl<V, E, M> Worker<V, E, M> {
             }
 
             // Collect vertex's pending messages for later sending.
-            let mut send_queue = vertex.send_queue.borrow_mut();
-            while let Some(mut message) = send_queue.pop() {
-                let receiver = message.receiver;
-                let queue = self.send_queues.entry(receiver).or_insert(Vec::new());
+            for mut message in vertex.send_queue.borrow_mut().drain(..) {
+                let queue = self
+                    .send_queues
+                    .entry(message.receiver)
+                    .or_insert_with(Vec::new);
+
                 message.value = match (combiner_op, queue.pop()) {
                     (Some(combiner), Some(initial)) => {
                         combiner.combine(message.value, initial.value)
                     }
                     _ => message.value,
                 };
+
                 queue.push(message);
             }
 
@@ -179,22 +179,27 @@ impl<V, E, M> Worker<V, E, M> {
         }
 
         // Remove vertices.
-        for id in removed {
-            self.vertices.remove(&id);
+        for id in &removed {
+            self.vertices.remove(id);
         }
 
         // Send messages to other workers.
+        self.n_msg_sent = 0;
         for send_queue in self.send_queues.values_mut() {
             self.n_msg_sent += send_queue.len() as i64;
-            while let Some(message) = send_queue.pop() {
+            for message in send_queue.drain(..) {
                 self.channel.send(ChannelMessage::Message(message));
             }
         }
+
+        // Flush messages.
+        self.channel.flush();
     }
 
     fn process_messages(&mut self, context: &RwLockReadGuard<Context<V, E, M>>) {
         let combiner_op = context.combiner.as_ref();
 
+        self.n_msg_recv = 0;
         for content in &self.channel {
             match content {
                 ChannelMessage::Message(message) => {
@@ -225,22 +230,14 @@ impl<V, E, M> Worker<V, E, M> {
 
         match context.operation() {
             Operation::Load => self.load(context),
-            Operation::Compute => {
-                self.clean();
-                self.compute(context);
-            }
+            Operation::Compute => self.compute(context),
         }
-
-        self.channel.flush();
         self.process_messages(context);
 
-        self.time_cost += now.elapsed().as_millis();
+        self.time_cost = now.elapsed().as_millis();
     }
 
     pub fn report(&self, name: &String) -> Option<Box<AggVal>> {
-        match self.aggregated_values.borrow_mut().remove(name) {
-            Some(value) => Some(value),
-            None => None,
-        }
+        self.aggregated_values.borrow_mut().remove(name)
     }
 }
