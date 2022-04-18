@@ -1,4 +1,4 @@
-use super::Vertex;
+use crate::Vertex;
 
 use std::any::Any;
 

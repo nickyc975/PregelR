@@ -1,4 +1,4 @@
-use super::message::Message;
+use crate::Message;
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -93,9 +93,8 @@ impl<M> Channel<M> {
                 ChannelMessageBatch(Vec::with_capacity(self.batch_size)),
             );
 
-            match self.senders[index].send(batch) {
-                Err(e) => eprintln!("Send message content failed: {}", e),
-                _ => (),
+            if let Err(e) = self.senders[index].send(batch) {
+                eprintln!("Send message content failed: {}", e)
             }
         }
     }
@@ -107,9 +106,8 @@ impl<M> Channel<M> {
                 ChannelMessageBatch(Vec::with_capacity(self.batch_size)),
             );
 
-            match self.senders[index].send(batch) {
-                Err(e) => eprintln!("Send message content failed: {}", e),
-                _ => (),
+            if let Err(e) = self.senders[index].send(batch) {
+                eprintln!("Send message content failed: {}", e)
             }
         }
     }

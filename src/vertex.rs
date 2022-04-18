@@ -1,4 +1,4 @@
-use super::message::Message;
+use crate::Message;
 
 use std::cell::RefCell;
 use std::collections::hash_map::{self, HashMap};

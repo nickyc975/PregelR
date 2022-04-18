@@ -1,15 +1,17 @@
-use super::channel::Channel;
-use super::worker::Worker;
-use super::Aggregate;
-use super::Combine;
-use super::Vertex;
-use super::{Context, Operation};
+use crate::Aggregate;
+use crate::Channel;
+use crate::Combine;
+use crate::ComputeFn;
+use crate::EdgeParserFn;
+use crate::VertexParserFn;
+use crate::Worker;
+use crate::{Context, Operation};
 
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::thread::spawn;
 use std::time::Instant;
 
@@ -37,13 +39,11 @@ where
     pub fn new(
         nworkers: i64,
         msg_batch_size: usize,
-        compute: Box<
-            dyn Fn(&mut Vertex<V, E, M>, &RwLockReadGuard<Context<V, E, M>>) + Send + Sync,
-        >,
+        compute: Box<ComputeFn<V, E, M>>,
         work_path: &Path,
     ) -> Self {
-        assert_eq!(nworkers > 0, true);
-        assert_eq!(msg_batch_size > 0, true);
+        assert!(nworkers > 0);
+        assert!(msg_batch_size > 0);
 
         if work_path.exists() {
             panic!("Work path {} exists!", work_path.to_string_lossy());
@@ -65,18 +65,12 @@ where
         }
     }
 
-    pub fn set_edge_parser(
-        &mut self,
-        edge_parser: Box<dyn Fn(&String) -> Option<(i64, i64, E)> + Send + Sync>,
-    ) -> &mut Self {
+    pub fn set_edge_parser(&mut self, edge_parser: Box<EdgeParserFn<E>>) -> &mut Self {
         self.context.write().unwrap().edge_parser = Some(edge_parser);
         self
     }
 
-    pub fn set_vertex_parser(
-        &mut self,
-        vertex_parser: Box<dyn Fn(&String) -> Option<(i64, V)> + Send + Sync>,
-    ) -> &mut Self {
+    pub fn set_vertex_parser(&mut self, vertex_parser: Box<VertexParserFn<V>>) -> &mut Self {
         self.context.write().unwrap().vertex_parser = Some(vertex_parser);
         self
     }
@@ -117,12 +111,10 @@ where
             })
             .collect();
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if let Some((index, line)) = cal_index(line) {
-                    writers[index].write_all(line.as_bytes())?;
-                    writers[index].write_all("\n".as_bytes())?;
-                }
+        for line in reader.lines().flatten() {
+            if let Some((index, line)) = cal_index(line) {
+                writers[index].write_all(line.as_bytes())?;
+                writers[index].write_all("\n".as_bytes())?;
             }
         }
 
@@ -200,7 +192,7 @@ where
             context.num_vertices += worker.local_n_vertices();
 
             for (name, aggregator) in context.aggregators.iter() {
-                if let Some(new_val) = worker.report(&name) {
+                if let Some(new_val) = worker.report(name) {
                     let (name, value) = match aggregated_values.remove_entry(name) {
                         Some((name, init)) => (name, aggregator.aggregate(init, new_val)),
                         None => (name.clone(), new_val),
@@ -224,15 +216,15 @@ where
         for i in (0..self.nworkers).rev() {
             let mut worker = Worker::new(i, channels.remove(&i).unwrap());
 
-            worker.edges_path = match self.edges_path.as_ref() {
-                Some(path) => Some(path.join(format!("{}.txt", i))),
-                None => None,
-            };
+            worker.edges_path = self
+                .edges_path
+                .as_ref()
+                .map(|path| path.join(format!("{}.txt", i)));
 
-            worker.vertices_path = match self.vertices_path.as_ref() {
-                Some(path) => Some(path.join(format!("{}.txt", i))),
-                None => None,
-            };
+            worker.vertices_path = self
+                .vertices_path
+                .as_ref()
+                .map(|path| path.join(format!("{}.txt", i)));
 
             self.workers.insert(i as i64, worker);
         }

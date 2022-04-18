@@ -1,8 +1,8 @@
-use super::channel::{Channel, ChannelMessage};
-use super::message::Message;
-use super::AggVal;
-use super::Vertex;
-use super::{Context, Operation};
+use crate::AggVal;
+use crate::Message;
+use crate::Vertex;
+use crate::{Channel, ChannelMessage};
+use crate::{Context, Operation};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -74,19 +74,20 @@ impl<V, E, M> Worker<V, E, M> {
             ),
         };
 
-        for line in io::BufReader::new(file).lines() {
-            if let Ok(line) = line {
-                if let Some((source, target, edge)) = parser(&line) {
-                    let vertex = self.vertices.entry(source).or_insert(Vertex::new(source));
+        for line in io::BufReader::new(file).lines().flatten() {
+            if let Some((source, target, edge)) = parser(&line) {
+                let vertex = self
+                    .vertices
+                    .entry(source)
+                    .or_insert_with(|| Vertex::new(source));
 
-                    if !vertex.has_outer_edge_to(target) {
-                        vertex.add_outer_edge((source, target, edge));
-                    } else {
-                        eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
-                    }
-
-                    self.channel.send(ChannelMessage::Vertex(target));
+                if !vertex.has_outer_edge_to(target) {
+                    vertex.add_outer_edge((source, target, edge));
+                } else {
+                    eprintln!("Warning: duplicate edge from {} to %{}!", source, target);
                 }
+
+                self.channel.send(ChannelMessage::Vertex(target));
             }
         }
     }
@@ -108,12 +109,10 @@ impl<V, E, M> Worker<V, E, M> {
             ),
         };
 
-        for line in io::BufReader::new(file).lines() {
-            if let Ok(line) = line {
-                if let Some((id, value)) = parser(&line) {
-                    let vertex = self.vertices.entry(id).or_insert(Vertex::new(id));
-                    vertex.value = Some(value);
-                }
+        for line in io::BufReader::new(file).lines().flatten() {
+            if let Some((id, value)) = parser(&line) {
+                let vertex = self.vertices.entry(id).or_insert_with(|| Vertex::new(id));
+                vertex.value = Some(value);
             }
         }
     }
@@ -203,7 +202,7 @@ impl<V, E, M> Worker<V, E, M> {
                     let vertex = self
                         .vertices
                         .entry(receiver_id)
-                        .or_insert(Vertex::new(receiver_id));
+                        .or_insert_with(|| Vertex::new(receiver_id));
 
                     let mut recv_queue = vertex.recv_queue.borrow_mut();
                     let value = match (combiner_op, recv_queue.pop()) {
@@ -215,7 +214,7 @@ impl<V, E, M> Worker<V, E, M> {
                     self.n_msg_recv += 1;
                 }
                 ChannelMessage::Vertex(id) => {
-                    self.vertices.entry(id).or_insert(Vertex::new(id));
+                    self.vertices.entry(id).or_insert_with(|| Vertex::new(id));
                 }
             }
         }
